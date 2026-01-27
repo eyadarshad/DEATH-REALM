@@ -1,0 +1,14 @@
+void AMazeGameMode::SetGameVolume(float Volume)
+{
+    GameVolume = FMath::Clamp(Volume, 0.0f, 1.0f);
+    
+    // Apply volume immediately
+    if (UWorld* World = GetWorld())
+    {
+        FAudioDevice* AudioDevice = World->GetAudioDeviceRaw();
+        if (AudioDevice)
+        {
+            AudioDevice->SetTransientMasterVolume(GameVolume);
+        }
+    }
+}
