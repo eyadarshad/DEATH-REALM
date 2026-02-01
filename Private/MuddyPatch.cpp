@@ -101,11 +101,11 @@ void AMuddyPatch::OnTriggerBeginOverlap(UPrimitiveComponent* OverlappedComponent
     // Player touched while on ground - apply muddy effect!
     UE_LOG(LogTemp, Warning, TEXT("[MuddyPatch] ⚠️ Player stepped in mud! Resolution reduced!"));
     
-    // Get game mode and apply resolution effect
+    // Get game mode and apply muddy effect
     AMazeGameMode* GameMode = Cast<AMazeGameMode>(UGameplayStatics::GetGameMode(GetWorld()));
     if (GameMode)
     {
-        GameMode->ApplyMuddyEffect(EffectDuration, ResolutionScale);
+        GameMode->ApplyMuddyEffect(EffectDuration);  // ResolutionScale is now hardcoded to 50% in the function
     }
     
     // Visual feedback

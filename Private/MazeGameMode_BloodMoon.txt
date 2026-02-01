@@ -1,0 +1,111 @@
+// ADD THESE FUNCTIONS TO THE END OF MazeGameMode.cpp (before the final closing brace)
+
+// ==================== LEVEL 5 BLOOD MOON FUNCTIONS ====================
+
+void AMazeGameMode::SpawnSecondMonster()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ⚠️ SECOND MONSTER SPAWNING!"));
+    
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON: SECOND MONSTER AWAKENS!"));
+    }
+    
+    // Spawn using existing logic
+    SpawnMonster();
+}
+
+void AMazeGameMode::ActivateAggressiveMode()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ⚠️ AGGRESSIVE MODE ACTIVATED!"));
+    
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON: MONSTERS ENRAGED! SPEED INCREASED!"));
+    }
+    
+    // Make all monsters faster
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster && Monster->GetCharacterMovement())
+        {
+            float CurrentSpeed = Monster->GetCharacterMovement()->MaxWalkSpeed;
+            Monster->GetCharacterMovement()->MaxWalkSpeed = CurrentSpeed * 1.5f;  // 50% faster
+            UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] Monster speed: %.0f -> %.0f"), 
+                CurrentSpeed, Monster->GetCharacterMovement()->MaxWalkSpeed);
+        }
+    }
+}
+
+void AMazeGameMode::SetBloodMoonAtmosphere()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] 🔴 Setting blood red atmosphere..."));
+    
+    // Find directional light
+    TArray<AActor*> FoundLights;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADirectionalLight::StaticClass(), FoundLights);
+    
+    for (AActor* LightActor : FoundLights)
+    {
+        ADirectionalLight* DirLight = Cast<ADirectionalLight>(LightActor);
+        if (DirLight)
+        {
+            // Blood red color
+            DirLight->SetLightColor(FLinearColor(0.8f, 0.0f, 0.0f));  // Deep red
+            DirLight->SetIntensity(3.0f);  // Slightly brighter
+            
+            UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ✓ Directional light set to blood red"));
+        }
+    }
+    
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON RISES - SURVIVE THE CRIMSON NIGHT!"));
+    }
+}
+
+
+// ADD THIS TO Tick() FUNCTION - AFTER THE MONSTER SPEED BOOST SECTION:
+
+    // Level 5 Blood Moon mechanics
+    if (CurrentLevel == 5 && CurrentGameState == EGameState::Playing)
+    {
+        FLevelConfig Config = LevelManager->GetLevelConfig(5);
+        
+        // Second monster spawn at 1:30
+        if (!bSecondMonsterSpawned && Config.SecondMonsterSpawnTime > 0.0f)
+        {
+            if (RemainingTime <= Config.SecondMonsterSpawnTime)
+            {
+                SpawnSecondMonster();
+                bSecondMonsterSpawned = true;
+            }
+        }
+        
+        // Aggressive mode at 1:00
+        if (!bAggressiveModeActivated && Config.AggressiveModeTime > 0.0f)
+        {
+            if (RemainingTime <= Config.AggressiveModeTime)
+            {
+                ActivateAggressiveMode();
+                bAggressiveModeActivated = true;
+            }
+        }
+    }
+
+
+// ALSO UPDATE CleanupBeforeLevel() - ADD AFTER MUDDY PATCHES CLEANUP:
+
+    // Cleanup monsters
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster)
+        {
+            Monster->Destroy();
+        }
+    }
+    SpawnedMonsters.Empty();
+    bMonsterSpawned = false;

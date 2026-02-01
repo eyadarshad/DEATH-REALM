@@ -144,3 +144,17 @@ void AMazePlayerController::OnPausePressed()
         }
     }
 }
+
+void AMazePlayerController::StartLevel(int32 LevelNumber)
+{
+    UE_LOG(LogTemp, Warning, TEXT("[Console] StartLevel command called with level: %d"), LevelNumber);
+    
+    if (AMazeGameMode* GameMode = Cast<AMazeGameMode>(UGameplayStatics::GetGameMode(GetWorld())))
+    {
+        GameMode->StartLevel(LevelNumber);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("[Console] Failed to get MazeGameMode!"));
+    }
+}

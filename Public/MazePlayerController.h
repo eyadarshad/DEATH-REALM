@@ -48,4 +48,9 @@ public:
     void Turn(float Value);
     void LookUp(float Value);
     void JumpPressed();
+    
+    // ==================== CONSOLE COMMANDS ====================
+    
+    UFUNCTION(Exec)
+    void StartLevel(int32 LevelNumber);
 };

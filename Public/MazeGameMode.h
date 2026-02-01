@@ -15,6 +15,8 @@ enum class EGameState : uint8
     Lost        UMETA(DisplayName = "Lost")
 };
 
+class UCreditsWidget;
+
 UCLASS()
 class MAZERUNNER_API AMazeGameMode : public AGameModeBase
 {
@@ -77,7 +79,11 @@ public:
     bool bEnableCameraControlledFlashlight;  // Toggle for camera-controlled flashlight (easy to disable)
     
     UPROPERTY()
-    class AMonsterAI* SpawnedMonster;
+    TArray<class AMonsterAI*> SpawnedMonsters;  // Track all monsters (Level 5 has 2)
+    
+    // Level 5 Blood Moon flags
+    bool bSecondMonsterSpawned;
+    bool bAggressiveModeActivated;
     
     UPROPERTY()
     class AGoldenStar* SpawnedStar;
@@ -92,6 +98,9 @@ public:
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawn Classes")
     TSubclassOf<class AGoldenStar> GoldenStarClass;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawn Classes")
+    TSubclassOf<class AMuddyPatch> MuddyPatchClass;
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
     TSubclassOf<class UUserWidget> GameOverWidgetClass;
@@ -140,8 +149,49 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
     TSubclassOf<class UUserWidget> LoadingScreenWidgetClass;
     
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+    TSubclassOf<class ULevelSelectWidget> LevelSelectWidgetClass;
+    
+    UPROPERTY()
+    class ULevelSelectWidget* LevelSelectWidget;
+    
     UPROPERTY()
     class UUserWidget* LoadingScreenWidget;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+    TSubclassOf<class UCreditsWidget> CreditsWidgetClass;
+    
+    UPROPERTY()
+    class UCreditsWidget* CreditsWidget;
+    
+    // ==================== LEVEL PROGRESSION ====================
+    
+    UPROPERTY()
+    class ALevelProgressionManager* LevelManager;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawn Classes")
+    TSubclassOf<class ASafeZoneCell> SafeZoneCellClass;
+    
+    UPROPERTY()
+    class ASafeZoneCell* SpawnedSafeZone;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    int32 CurrentLevel;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    int32 StarsEarnedThisLevel;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    float LevelStartTime;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    float LevelCompletionTime;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    bool bSafeZoneActive;
+    
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Level Progression")
+    float SafeZoneActivationTime;  // When to spawn safe zone (based on config)
     
     // Current maze size settings
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Settings")
@@ -179,19 +229,28 @@ public:
     float OriginalResolution;
     float OriginalPlayerSpeed;  // Store original player speed for restoration
     
-    // ==================== MAZE TRAP SYSTEM ====================
+    // ==================== TRAP CELLS ====================
     
-    bool bMazeTrapTriggered;      // Has the trap been triggered this game?
-    bool bPlayerTrapped;          // Is player currently trapped?
-    float TrapDuration;           // Remaining trap time
-    class AMazeCell* TrappedCell; // Cell where player is trapped
+    // Trap Cells (floor-based traps that capture player)
+    UPROPERTY(EditDefaultsOnly, Category = "Hazards")
+    TSubclassOf<class ATrapCell> TrapCellClass;
+    
+    UPROPERTY()
+    TArray<class ATrapCell*> SpawnedTrapCells;
     
     // ==================== AUDIO ====================
     
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
-    class USoundBase* WinSound;
+    UPROPERTY(EditDefaultsOnly, Category = "Audio")
+    class USoundBase* WinSound;  // Voice effect when player escapes maze
     
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+    UPROPERTY(EditDefaultsOnly, Category = "Audio")
+    class USoundBase* CreditsMusic;  // Music for rolling credits
+    
+    // Track credits music to stop it later
+    UPROPERTY()
+    class UAudioComponent* CreditsMusicComponent;
+    
+    UPROPERTY(EditDefaultsOnly, Category = "Audio")
     class USoundBase* LoseSound;
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
@@ -202,6 +261,14 @@ public:
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
     class USoundBase* MazeRegenerationSound;  // Sound for maze trap regeneration
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+    class USoundBase* TrapSound;  // Sound for maze trap activation
+    
+    // ==================== FLASHLIGHT ====================
+    
+    UFUNCTION(BlueprintCallable, Category = "Flashlight")
+    void CreatePlayerFlashlight();
     
     // ==================== SPAWN SETTINGS ====================
     
@@ -221,6 +288,33 @@ public:
     
     UFUNCTION(BlueprintCallable, Category = "Game Flow")
     void StartGame();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void StartLevel(int32 LevelNumber);
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void CompleteLevel();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void CalculateStarRating();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void ShowLevelBriefing();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void ShowLevelCompleteScreen();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void RetryCurrentLevel();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void LoadNextLevel();
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void LoadSelectedLevel(int32 LevelNumber);
+    
+    UFUNCTION(BlueprintCallable, Category = "Level Progression")
+    void ShowLevelSelectScreen();
     
     UFUNCTION(BlueprintCallable, Category = "Game Flow")
     void GenerateMaze();  // Generate maze with current settings
@@ -249,6 +343,11 @@ public:
     
     UFUNCTION(BlueprintCallable, Category = "Spawning")
     void SpawnMonster();
+    
+    // Level 5 Blood Moon functions
+    void SpawnSecondMonster();
+    void ActivateAggressiveMode();
+    void SetBloodMoonAtmosphere();
     
     UFUNCTION(BlueprintCallable, Category = "Spawning")
     void SpawnStars();
@@ -287,6 +386,15 @@ public:
     UFUNCTION(BlueprintCallable, Category = "UI")
     void CloseSettingsMenu();
     
+    UFUNCTION(BlueprintCallable, Category = "UI")
+    void HideSettingsMenu();
+    
+    UFUNCTION(BlueprintCallable, Category = "Game Flow")
+    void QuitGame();
+    
+    UFUNCTION(BlueprintCallable, Category = "Game Flow")
+    void ReturnToMainMenu();  // Return to main menu with complete game cleanup
+    
     UFUNCTION(BlueprintCallable, Category = "Settings")
     int32 GetMazeRows() const { return CurrentMazeRows; }
     
@@ -300,7 +408,7 @@ public:
     void SetMazeCols(int32 Cols);
     
     UFUNCTION(BlueprintCallable, Category = "Settings")
-    void SaveSettings();
+    void SaveSettings(int32 NewRows, int32 NewCols);
     
     // ==================== OPTIONS MENU FUNCTIONS ====================
     
@@ -328,14 +436,38 @@ public:
     // ==================== MUDDY EFFECT ====================
     
     UFUNCTION(BlueprintCallable, Category = "Effects")
-    void ApplyMuddyEffect(float Duration, float ResolutionScale);
+    void ApplyMuddyEffect(float Duration);
     
-    // ==================== MAZE TRAP FUNCTIONS ====================
+    // ==================== TRAP CELL FUNCTIONS ====================
     
-    UFUNCTION(BlueprintCallable, Category = "Maze Trap")
-    void TriggerMazeTrap();
+    UFUNCTION(BlueprintCallable, Category = "Hazards")
+    void SpawnTrapCells(int32 Count);  // Spawn trap cells in random maze cells
     
-    class AMazeCell* GetPlayerCurrentCell();
-    void TrapPlayer(AMazeCell* Cell);
-    void ReleaseTrap();
+    // ==================== LEVEL PROGRESSION FUNCTIONS ====================
+    
+    void CleanupBeforeLevel();  // Complete cleanup between levels
+    
+    // ==================== SAFE ZONE FUNCTIONS ====================
+    
+    UFUNCTION(BlueprintCallable, Category = "Safe Zone")
+    void SpawnSafeZone(float ActivationTime);
+    
+    UFUNCTION(BlueprintCallable, Category = "Safe Zone")
+    void CheckSafeZoneProtection();
+    
+    void CheckSafeZoneStatus();  // Check if player is in safe zone during maze regen
+    
+    UFUNCTION(BlueprintCallable, Category = "Safe Zone")
+    bool IsPlayerInSafeZone() const;
+    
+    UFUNCTION(BlueprintCallable, Category = "Hazards")
+    void SpawnMuddyPatches(int32 Count);  // Spawn muddy patch hazards
+
+    void CleanupForCredits();
+    void ShowCredits();
+    
+    // CHEAT CODE: Instant win
+    UFUNCTION(Exec, Category = "Cheats")
+    void Win();
 };
+

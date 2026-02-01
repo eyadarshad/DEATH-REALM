@@ -76,20 +76,14 @@ void AMazeCell::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Create dynamic material for floor
-    if (Floor)
+    // PERFORMANCE FIX: Don't create materials in BeginPlay!
+    // Creating 400-900 dynamic materials at once causes texture loading loop
+    // Materials will be created lazily when needed (SetAsEscapeCell, SetAsPathCell, etc.)
+    
+    // Just ensure floor has a base material
+    if (Floor && !Floor->GetMaterial(0))
     {
-        UMaterialInterface* BaseMaterial = Floor->GetMaterial(0);
-        if (BaseMaterial)
-        {
-            FloorMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-            if (FloorMaterial)
-            {
-                Floor->SetMaterial(0, FloorMaterial);
-                FloorMaterial->SetVectorParameterValue(FName("EmissiveColor"), FLinearColor(0.0f, 0.0f, 0.0f));
-                FloorMaterial->SetScalarParameterValue(FName("EmissiveIntensity"), 0.0f);
-            }
-        }
+        UE_LOG(LogTemp, Warning, TEXT("[MazeCell] Floor missing base material at [%d,%d]"), Row, Col);
     }
 }
 

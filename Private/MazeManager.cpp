@@ -741,6 +741,6 @@ void AMazeManager::SpawnMuddyPatches()
         }
     }
     
-    UE_LOG(LogTemp, Warning, TEXT("[MazeManager] ✓ Spawned %d muddy patches"), SpawnedCount);
+    UE_LOG(LogTemp, Warning, TEXT("[MazeManager] Spawned %d muddy patches"), SpawnedCount);
 }
 

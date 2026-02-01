@@ -1,0 +1,33 @@
+    FVector PlayerLoc = Player->GetActorLocation();
+    FVector SafeZoneLoc = SpawnedSafeZone->GetActorLocation();
+    float Distance = FVector::Dist(PlayerLoc, SafeZoneLoc);
+    
+    return Distance <= 300.0f;  // Within safe zone radius
+}
+
+// CHEAT CODE: Instant Win
+void AMazeGameMode::Win()
+{
+    if (CurrentGameState != EGameState::Playing)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CHEAT] Win command ignored - not in playing state"));
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
+                TEXT("Cheat 'win' only works during gameplay!"));
+        }
+        return;
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CHEAT] Win command activated! Instant victory!"));
+    
+    // Show cheat message
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Cyan,
+            TEXT("🎮 CHEAT ACTIVATED: Instant Win!"));
+    }
+    
+    // Complete the level instantly
+    CompleteLevel();
+}

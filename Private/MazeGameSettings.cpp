@@ -11,4 +11,11 @@ UMazeGameSettings::UMazeGameSettings()
     MazeCols = 15;
     MouseSensitivity = 1.0f;
     GameVolume = 0.8f;
+    
+    // Level progression defaults
+    HighestUnlockedLevel = 1;  // Only Level 1 unlocked initially
+    TotalStarsEarned = 0;
+    TotalLevelsCompleted = 0;
+    LevelStars.Empty();
+    LevelBestTimes.Empty();
 }

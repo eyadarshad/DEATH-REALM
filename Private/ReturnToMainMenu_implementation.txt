@@ -1,0 +1,55 @@
+void AMazeGameMode::ReturnToMainMenu()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Returning to main menu with complete cleanup..."));
+    
+    // 1. Stop all timers for this object
+    GetWorldTimerManager().ClearAllTimersForObject(this);
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ All timers cleared"));
+    
+    // 2. Stop credits music if playing
+    if (CreditsMusicComponent && CreditsMusicComponent->IsPlaying())
+    {
+        CreditsMusicComponent->Stop();
+        CreditsMusicComponent = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ Credits music stopped"));
+    }
+    
+    // 3. Complete cleanup of all game entities
+    CleanupBeforeLevel();
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ Game entities cleaned up"));
+    
+    // 4. Reset game state
+    CurrentGameState = EGameState::Menu;
+    CurrentLevel = 0;
+    bInMenuPreview = true;
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ Game state reset to Menu"));
+    
+    // 5. Hide all UI widgets
+    if (HUDWidget)
+    {
+        HUDWidget->RemoveFromParent();
+        HUDWidget = nullptr;
+    }
+    
+    if (PauseMenuWidget)
+    {
+        PauseMenuWidget->RemoveFromParent();
+        PauseMenuWidget = nullptr;
+    }
+    
+    if (SettingsMenuWidget)
+    {
+        SettingsMenuWidget->RemoveFromParent();
+        SettingsMenuWidget = nullptr;
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ All UI widgets hidden"));
+    
+    // 6. Reset time dilation
+    UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
+    
+    // 7. Show main menu
+    ShowMainMenu();
+    
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] ✓ Complete! Main menu displayed"));
+}

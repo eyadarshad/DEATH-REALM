@@ -31,7 +31,7 @@ void UOptionsMenuWidget::NativeConstruct()
         OriginalMouseSensitivity = CurrentSensitivity;
         
         SpinBox_MouseSensitivity->OnValueChanged.AddDynamic(this, &UOptionsMenuWidget::OnMouseSensitivityChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] ✓ Mouse sensitivity initialized: %.2f"), CurrentSensitivity);
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Mouse sensitivity initialized: %.2f"), CurrentSensitivity);
     }
     
     // Initialize Game Sound SpinBox
@@ -47,7 +47,7 @@ void UOptionsMenuWidget::NativeConstruct()
         OriginalGameSound = CurrentVolume;
         
         SpinBox_GameSound->OnValueChanged.AddDynamic(this, &UOptionsMenuWidget::OnGameSoundChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] ✓ Game sound initialized: %.2f"), CurrentVolume);
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Game sound initialized: %.2f"), CurrentVolume);
     }
     
     // Initialize Graphics Quality ComboBox
@@ -78,20 +78,20 @@ void UOptionsMenuWidget::NativeConstruct()
         OriginalGraphicsQuality = CurrentQuality;
         
         ComboBox_Graphics->OnSelectionChanged.AddDynamic(this, &UOptionsMenuWidget::OnGraphicsQualityChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] ✓ Graphics quality initialized: %s"), *CurrentQuality);
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Graphics quality initialized: %s"), *CurrentQuality);
     }
     
     // Bind button click events
     if (Button_Save)
     {
         Button_Save->OnClicked.AddDynamic(this, &UOptionsMenuWidget::OnSaveClicked);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] ✓ Save button bound"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Save button bound"));
     }
     
     if (Button_Cancel)
     {
         Button_Cancel->OnClicked.AddDynamic(this, &UOptionsMenuWidget::OnCancelClicked);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] ✓ Cancel button bound"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Cancel button bound"));
     }
     
     UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] === Initialization complete ==="));
@@ -237,12 +237,15 @@ void UOptionsMenuWidget::ApplyGraphicsQuality(const FString& Quality)
     }
     else if (Quality == TEXT("Ultra High"))
     {
-        // Ultra High: Post-processing ON completely at high settings
-        Settings->SetPostProcessingQuality(3);
-        Settings->SetShadowQuality(3);
-        Settings->SetTextureQuality(3);
-        Settings->SetVisualEffectQuality(3);
-        Settings->SetOverallScalabilityLevel(3);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied ULTRA HIGH graphics (Post-processing FULL)"));
+        // Ultra High: MAXIMUM graphics quality - all settings at epic level
+        Settings->SetPostProcessingQuality(4);  // Epic post-processing
+        Settings->SetShadowQuality(4);          // Epic shadows
+        Settings->SetTextureQuality(4);         // Epic textures
+        Settings->SetVisualEffectQuality(4);    // Epic VFX
+        Settings->SetAntiAliasingQuality(4);    // Epic anti-aliasing
+        Settings->SetViewDistanceQuality(4);    // Epic view distance
+        Settings->SetFoliageQuality(4);         // Epic foliage
+        Settings->SetOverallScalabilityLevel(4); // Epic overall
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied ULTRA HIGH graphics (EPIC quality - maximum settings)"));
     }
 }

@@ -33,7 +33,7 @@ void USettingsMenuWidget::NativeConstruct()
         SpinBox_Rows->SetMaxValue(30.0f);
         SpinBox_Rows->SetDelta(1.0f); // Increment by 1
         SpinBox_Rows->OnValueChanged.AddDynamic(this, &USettingsMenuWidget::OnRowsChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[SettingsWidget] ✓ Rows spinbox initialized to %d"), GameMode->GetMazeRows());
+        UE_LOG(LogTemp, Warning, TEXT("[SettingsWidget] Rows spinbox initialized to %d"), GameMode->GetMazeRows());
     }
     else
     {
@@ -47,7 +47,7 @@ void USettingsMenuWidget::NativeConstruct()
         SpinBox_Cols->SetMaxValue(30.0f);
         SpinBox_Cols->SetDelta(1.0f); // Increment by 1
         SpinBox_Cols->OnValueChanged.AddDynamic(this, &USettingsMenuWidget::OnColsChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[SettingsWidget] ✓ Cols spinbox initialized to %d"), GameMode->GetMazeCols());
+        UE_LOG(LogTemp, Warning, TEXT("[SettingsWidget] Cols spinbox initialized to %d"), GameMode->GetMazeCols());
     }
     else
     {
@@ -58,7 +58,7 @@ void USettingsMenuWidget::NativeConstruct()
     if (Button_Save)
     {
         Button_Save->OnClicked.AddDynamic(this, &USettingsMenuWidget::StartGame);
-        UE_LOG(LogTemp, Warning, TEXT("[Free2Play] ✓ Start button bound"));
+        UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Start button bound"));
     }
     else
     {
@@ -68,7 +68,7 @@ void USettingsMenuWidget::NativeConstruct()
     if (Button_Cancel)
     {
         Button_Cancel->OnClicked.AddDynamic(this, &USettingsMenuWidget::BackToMainMenu);
-        UE_LOG(LogTemp, Warning, TEXT("[Free2Play] ✓ Back button bound"));
+        UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Back button bound"));
     }
     else
     {

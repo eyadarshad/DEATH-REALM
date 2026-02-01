@@ -1,10 +1,9 @@
-// MazeGameMode.cpp - FIXED MONSTER SPAWN LOCATION + WALL OVERLAPS + SPEED BOOST
+// MazeGameMode.cpp - COMPLETE WITH LEVEL PROGRESSION SYSTEM
 #include "MazeGameMode.h"
 #include "MazeManager.h"
 #include "MazeCell.h"
 #include "MonsterAI.h"
 #include "GoldenStar.h"
-#include "MuddyPatch.h"
 #include "MazePlayerController.h"
 #include "MazeGameSettings.h"
 #include "LoadingScreenWidget.h"
@@ -18,6 +17,14 @@
 #include "Components/TextBlock.h"
 #include "Components/SpotLightComponent.h"
 #include "AudioDevice.h"
+#include "LevelProgressionManager.h"
+#include "LevelSelectWidget.h"
+#include "SafeZoneCell.h"
+#include "CreditsWidget.h"
+#include "MuddyPatch.h"
+#include "TrapCell.h"
+#include "Engine/DirectionalLight.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 
 AMazeGameMode::AMazeGameMode()
 {
@@ -59,12 +66,6 @@ AMazeGameMode::AMazeGameMode()
     OriginalPlayerSpeed = 600.0f;  // Default Unreal character speed
     bShowPerformanceStats = false;
     
-    // Maze trap initialization
-    bMazeTrapTriggered = false;
-    bPlayerTrapped = false;
-    TrapDuration = 5.0f;
-    TrappedCell = nullptr;
-    
     // Flashlight control
     PlayerFlashlight = nullptr;
     bEnableCameraControlledFlashlight = false;  // Disabled - using fixed flashlight position
@@ -73,14 +74,22 @@ AMazeGameMode::AMazeGameMode()
     CurrentCameraRotation = FRotator::ZeroRotator;
     TargetCameraRotation = FRotator::ZeroRotator;
     CameraRotationSpeed = 2.0f;  // Smooth interpolation speed
+
+    // Level progression initialization
+    CurrentLevel = 1;
+    StarsEarnedThisLevel = 0;
+    LevelCompletionTime = 0.0f;
+    LevelStartTime = 0.0f;
+    bSafeZoneActive = false;
+    SafeZoneActivationTime = -1.0f;
 }
 
 void AMazeGameMode::BeginPlay()
 {
     Super::BeginPlay();
     
-    // Show loading screen immediately (reduced to 2s for better UX)
-    ShowLoadingScreen("Initializing Maze Runner...", 2.0f);
+    // Show loading screen immediately
+    ShowLoadingScreen("Loading DEATH REALM...", 3.0f);  // Minimum 3 seconds
     
     // CRITICAL FIX: Reset resolution and speed at BeginPlay (handles level reload from RestartGame)
     if (GEngine)
@@ -115,7 +124,7 @@ void AMazeGameMode::BeginPlay()
     if (FoundManagers.Num() > 0)
     {
         MazeManager = Cast<AMazeManager>(FoundManagers[0]);
-        UE_LOG(LogTemp, Warning, TEXT("✓ Found existing MazeManager"));
+        UE_LOG(LogTemp, Warning, TEXT("Found existing MazeManager"));
     }
     else
     {
@@ -127,7 +136,7 @@ void AMazeGameMode::BeginPlay()
             FRotator::ZeroRotator, 
             SpawnParams
         );
-        UE_LOG(LogTemp, Warning, TEXT("✓ Created new MazeManager"));
+        UE_LOG(LogTemp, Warning, TEXT("Created new MazeManager"));
     }
     
     if (!MazeManager)
@@ -147,7 +156,30 @@ void AMazeGameMode::BeginPlay()
     
     // Step 3.5: Load settings
     LoadSettings();
-    UE_LOG(LogTemp, Warning, TEXT("✓ Settings loaded - Maze size: %dx%d"), CurrentMazeRows, CurrentMazeCols);
+    UE_LOG(LogTemp, Warning, TEXT("Settings loaded - Maze size: %dx%d"), CurrentMazeRows, CurrentMazeCols);
+    
+    // Step 3.6: Initialize Level Progression Manager
+    TArray<AActor*> FoundLevelManagers;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ALevelProgressionManager::StaticClass(), FoundLevelManagers);
+    if (FoundLevelManagers.Num() > 0)
+    {
+        LevelManager = Cast<ALevelProgressionManager>(FoundLevelManagers[0]);
+    }
+    else
+    {
+        FActorSpawnParameters LevelSpawnParams;
+        LevelSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        LevelManager = GetWorld()->SpawnActor<ALevelProgressionManager>(
+            ALevelProgressionManager::StaticClass(),
+            FVector::ZeroVector,
+            FRotator::ZeroRotator,
+            LevelSpawnParams
+        );
+    }
+    if (LevelManager)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[LevelProgression] Level Manager initialized"));
+    }
     
     // Step 4: Generate maze BEFORE showing main menu for preview
     UE_LOG(LogTemp, Warning, TEXT("[MenuPreview] Generating maze for preview..."));
@@ -167,8 +199,9 @@ void AMazeGameMode::BeginPlay()
     {
         SpawnPlayer();
         SpawnGoldenStar();
+        CreatePlayerFlashlight();  // FIX #1: Add flashlight to preview
         bInMenuPreview = true;
-        UE_LOG(LogTemp, Warning, TEXT("[MenuPreview] ✓ Player and star spawned for preview"));
+        UE_LOG(LogTemp, Warning, TEXT("[MenuPreview] Player, star, and flashlight spawned for preview"));
     }, 0.2f, false);
     
     // Step 6: Show main menu AFTER maze is ready
@@ -189,7 +222,7 @@ void AMazeGameMode::BeginPlay()
                     PC->SetInputMode(FInputModeGameAndUI());
                 }
                 
-                UE_LOG(LogTemp, Warning, TEXT("✓ Main Menu displayed with interactive preview!"));
+                UE_LOG(LogTemp, Warning, TEXT("Main Menu displayed with interactive preview!"));
             }
         }, 0.5f, false);
     }
@@ -210,55 +243,31 @@ void AMazeGameMode::StartGame()
         return;
     }
     
-    // Show loading screen AFTER validation to cover cleanup/regeneration glitches
-    // Check if size will change to show appropriate message
-    bool bWillRegenerate = false;
-    if (MazeManager)
-    {
-        int32 CurrentRows = MazeManager->Rows;
-        int32 CurrentCols = MazeManager->Cols;
-        
-        if (CurrentRows != CurrentMazeRows || CurrentCols != CurrentMazeCols)
-        {
-            bWillRegenerate = true;
-            ShowLoadingScreen(FString::Printf(TEXT("Generating %dx%d Maze..."), CurrentMazeRows, CurrentMazeCols), 3.0f);
-        }
-    }
-    
-    if (!bWillRegenerate)
-    {
-        // First time start - shorter loading
-        ShowLoadingScreen("Preparing Your Challenge...", 2.0f);
-    }
-    
     UE_LOG(LogTemp, Warning, TEXT("========================================"));
     UE_LOG(LogTemp, Warning, TEXT("[GameMode] STARTING NEW GAME"));
     UE_LOG(LogTemp, Warning, TEXT("========================================"));
     
     // CRITICAL FIX: Reset resolution to 100% at start of every game
-    // This fixes the bug where restarting during muddy effect keeps low resolution
     if (GEngine)
     {
         GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 100"));
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Resolution reset to 100%%"));
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Resolution reset to 100%%"));
     }
     bMuddyEffectActive = false;
     MuddyEffectTimer = 0.0f;
     
     // CRITICAL FIX: Reset player speed to default at start of every game
-    // This fixes the bug where restarting during muddy effect keeps slow speed
     if (Player)
     {
         ACharacter* PlayerChar = Cast<ACharacter>(Player);
         if (PlayerChar && PlayerChar->GetCharacterMovement())
         {
-            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = 600.0f;  // Default Unreal speed
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Player speed reset to 600"));
+            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = 600.0f;
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Player speed reset to 600"));
         }
     }
     
-    // COMPLETE CLEAN RESET FOR FREE2PLAY MODE
-    // Always check if maze size changed OR if this is a fresh start
+    // Check if maze size changed (settings were saved)
     bool bSizeChanged = false;
     if (MazeManager)
     {
@@ -273,81 +282,21 @@ void AMazeGameMode::StartGame()
         }
     }
     
-    // CRITICAL: ALWAYS do complete cleanup if size changed
-    if (bSizeChanged)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("========================================"));
-        UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] COMPLETE CLEAN RESET"));
-        UE_LOG(LogTemp, Warning, TEXT("========================================"));
-        
-        // 1. Destroy ALL maze cells (old maze)
-        TArray<AActor*> FoundCells;
-        UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMazeCell::StaticClass(), FoundCells);
-        for (AActor* Cell : FoundCells)
-        {
-            if (Cell)
-            {
-                Cell->Destroy();
-            }
-        }
-        UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ Destroyed %d maze cells"), FoundCells.Num());
-        
-        // 2. Destroy all muddy patches
-        TArray<AActor*> FoundMuddyPatches;
-        UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMuddyPatch::StaticClass(), FoundMuddyPatches);
-        for (AActor* Patch : FoundMuddyPatches)
-        {
-            if (Patch)
-            {
-                Patch->Destroy();
-            }
-        }
-        UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ Destroyed %d muddy patches"), FoundMuddyPatches.Num());
-        
-        // 3. Destroy golden star
-        if (SpawnedStar)
-        {
-            SpawnedStar->Destroy();
-            SpawnedStar = nullptr;
-            UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ Destroyed golden star"));
-        }
-        
-        // 4. Destroy monster
-        if (SpawnedMonster)
-        {
-            SpawnedMonster->Destroy();
-            SpawnedMonster = nullptr;
-            bMonsterSpawned = false;
-            UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ Destroyed monster"));
-        }
-        
-        // 5. Destroy old flashlight
-        if (PlayerFlashlight)
-        {
-            PlayerFlashlight->DestroyComponent();
-            PlayerFlashlight = nullptr;
-            UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ Destroyed flashlight"));
-        }
-        
-        UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] ✓ All old objects destroyed - ready for fresh generation"));
-    }
-    
     if (!bMazeGenerated || bSizeChanged)
     {
-        if (bSizeChanged)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[FREE2PLAY] Generating FRESH maze with size: %dx%d"), CurrentMazeRows, CurrentMazeCols);
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze not pre-generated, generating now..."));
-        }
-        
         MazeManager->SetMazeSize(CurrentMazeRows, CurrentMazeCols);
         MazeManager->GenerateMazeImmediate();
         bMazeGenerated = true;
         
         UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze generated immediately"));
+        
+        // CRITICAL FIX: Destroy old star if it exists (prevents instant win)
+        if (SpawnedStar)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Destroying old star before respawn"));
+            SpawnedStar->Destroy();
+            SpawnedStar = nullptr;
+        }
         
         // Spawn stars in the sky
         SpawnStars();
@@ -358,7 +307,7 @@ void AMazeGameMode::StartGame()
             return;
         }
         
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Escape cell created at: Row=%d, Col=%d"), 
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Escape cell created at: Row=%d, Col=%d"), 
                MazeManager->GetEscapeCell()->Row, MazeManager->GetEscapeCell()->Col);
     }
     
@@ -367,7 +316,6 @@ void AMazeGameMode::StartGame()
     RemainingTime = TotalGameTime;
     bMonsterSpawned = false;
     bMonsterSpeedBoosted = false;
-    bMazeTrapTriggered = false;  // RESET trap flag for new game
     bInMenuPreview = false;  // Exit preview mode
     OriginalMonsterSpeed = 0.0f;
     
@@ -380,7 +328,7 @@ void AMazeGameMode::StartGame()
         if (HUDWidget)
         {
             HUDWidget->AddToViewport();
-            UE_LOG(LogTemp, Warning, TEXT("✓ HUD Widget created and displayed"));
+            UE_LOG(LogTemp, Warning, TEXT("HUD Widget created and displayed"));
         }
     }
     else
@@ -389,33 +337,38 @@ void AMazeGameMode::StartGame()
     }
     
     // Step 3: Player and star handling
-    // CRITICAL FIX: Always respawn player if maze was regenerated
-    // Old player position might be beyond new escape cell boundary
-    
-    // FORCE respawn if maze size changed (player exists but needs new position)
-    if (bSizeChanged)
+    if (!Player || bSizeChanged)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze regenerated, FORCE respawning player at new start location..."));
-        
-        // CRITICAL: Destroy old flashlight before respawning
-        if (PlayerFlashlight)
+        if (bSizeChanged)
         {
-            PlayerFlashlight->DestroyComponent();
-            PlayerFlashlight = nullptr;
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze regenerated, respawning player at new start location..."));
+            
+            // CRITICAL: Destroy old flashlight before respawning
+            if (PlayerFlashlight)
+            {
+                PlayerFlashlight->DestroyComponent();
+                PlayerFlashlight = nullptr;
+            }
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Player missing, spawning..."));
         }
         
         SpawnPlayer();
     }
-    else if (!Player)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Player missing, spawning..."));
-        SpawnPlayer();
-    }
     
     // CRITICAL FIX: Always respawn star if maze was regenerated (escape cell changed)
-    if (bSizeChanged)
+    if (!SpawnedStar || bSizeChanged)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze regenerated, FORCE respawning star at new location..."));
+        if (bSizeChanged)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Maze regenerated, respawning star at new location..."));
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Star missing, spawning..."));
+        }
         
         // Destroy old star if it exists
         if (SpawnedStar)
@@ -426,30 +379,20 @@ void AMazeGameMode::StartGame()
         
         SpawnGoldenStar();
     }
-    else if (!SpawnedStar)
+    
+    // Step 4: Monster spawn timer (starts NOW when game begins) - only if enabled
+    if (MonsterSpawnTime >= 0.0f)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Star missing, spawning..."));
-        SpawnGoldenStar();
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster will spawn in %.0f seconds"), MonsterSpawnTime);
+        FTimerHandle MonsterTimer;
+        GetWorldTimerManager().SetTimer(MonsterTimer, this, &AMazeGameMode::SpawnMonster, MonsterSpawnTime, false);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster disabled for this level"));
     }
     
-    // Step 4: Monster spawn timer (starts NOW when game begins)
-    // CRITICAL FIX: Reset monster spawn flag if maze regenerated
-    if (bSizeChanged)
-    {
-        bMonsterSpawned = false;
-        if (SpawnedMonster)
-        {
-            SpawnedMonster->Destroy();
-            SpawnedMonster = nullptr;
-        }
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster reset for new maze size"));
-    }
-    
-    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster will spawn in %.0f seconds"), MonsterSpawnTime);
-    FTimerHandle MonsterTimer;
-    GetWorldTimerManager().SetTimer(MonsterTimer, this, &AMazeGameMode::SpawnMonster, MonsterSpawnTime, false);
-    
-    UE_LOG(LogTemp, Warning, TEXT("✓ Game Started!"));
+    UE_LOG(LogTemp, Warning, TEXT("Game Started!"));
     UE_LOG(LogTemp, Warning, TEXT("  - Time limit: %.0f seconds"), TotalGameTime);
     UE_LOG(LogTemp, Warning, TEXT("  - Monster spawns: %.0f seconds"), MonsterSpawnTime);
     UE_LOG(LogTemp, Warning, TEXT("========================================"));
@@ -508,12 +451,15 @@ void AMazeGameMode::StartPlaying()
         PC->bShowMouseCursor = false;
         PC->SetInputMode(FInputModeGameOnly());
         
-        // CRITICAL FIX: Always reset camera rotation to prevent menu rotation persisting
+        // Reset camera rotation to neutral position
         CurrentCameraRotation = FRotator::ZeroRotator;
         TargetCameraRotation = FRotator::ZeroRotator;
         PC->SetControlRotation(FRotator::ZeroRotator);
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Camera rotation reset to zero"));
     }
+    
+    // FIX #3: Create flashlight for Free2Play mode
+    CreatePlayerFlashlight();
+    UE_LOG(LogTemp, Warning, TEXT("[StartPlaying] Flashlight created for Free2Play mode"));
     
     // Start the game
     StartGame();
@@ -522,6 +468,14 @@ void AMazeGameMode::StartPlaying()
 void AMazeGameMode::ShowMainMenu()
 {
     UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Showing main menu"));
+    
+    // Stop only credits music (not all sounds)
+    if (CreditsMusicComponent && CreditsMusicComponent->IsPlaying())
+    {
+        CreditsMusicComponent->Stop();
+        CreditsMusicComponent = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[ShowMainMenu] Credits music stopped"));
+    }
     
     // Hide any existing UI
     if (HUDWidget)
@@ -550,7 +504,7 @@ void AMazeGameMode::ShowMainMenu()
                 PC->SetInputMode(FInputModeUIOnly());
             }
             
-            UE_LOG(LogTemp, Warning, TEXT("✓ Main Menu displayed!"));
+            UE_LOG(LogTemp, Warning, TEXT("Main Menu displayed!"));
         }
     }
 }
@@ -559,8 +513,8 @@ void AMazeGameMode::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
     
-    // Performance monitoring (SKIP during pause for accurate metrics)
-    if (DeltaTime > 0.0f && CurrentGameState != EGameState::Paused)
+    // Performance monitoring
+    if (DeltaTime > 0.0f)
     {
         CurrentFPS = 1.0f / DeltaTime;
         FPSSampleAccumulator += CurrentFPS;
@@ -645,46 +599,55 @@ void AMazeGameMode::Tick(float DeltaTime)
         CheckLoseCondition();
         
         // FEATURE: Increase monster speed and size in last 30 seconds
-        if (RemainingTime <= 30.0f && !bMonsterSpeedBoosted && SpawnedMonster)
+        if (RemainingTime <= 30.0f && !bMonsterSpeedBoosted && SpawnedMonsters.Num() > 0)
         {
             bMonsterSpeedBoosted = true;
             
-            // Store original speed if not already stored
-            if (OriginalMonsterSpeed == 0.0f)
+            // Boost first monster
+            AMonsterAI* FirstMonster = SpawnedMonsters[0];
+            if (FirstMonster)
             {
-                OriginalMonsterSpeed = SpawnedMonster->MoveSpeed;
+                // Store original speed if not already stored
+                if (OriginalMonsterSpeed == 0.0f)
+                {
+                    OriginalMonsterSpeed = FirstMonster->MoveSpeed;
+                }
+                
+                // Increase speed by 50%
+                float NewSpeed = OriginalMonsterSpeed * 1.5f;
+                FirstMonster->MoveSpeed = NewSpeed;
+                
+                // Update character movement component
+                if (FirstMonster->GetCharacterMovement())
+                {
+                    FirstMonster->GetCharacterMovement()->MaxWalkSpeed = NewSpeed;
+                }
+                
+                // GROW MONSTER TO 1.7x SIZE - Make it terrifying!
+                FVector NewScale = FVector(1.7f, 1.7f, 1.7f);
+                FirstMonster->SetActorScale3D(NewScale);
+                UE_LOG(LogTemp, Warning, TEXT("[GameMode] 👹 MONSTER GREW TO 1.7x SIZE! 👹"));
+                
+                UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster speed boosted from %.0f to %.0f"), 
+                       OriginalMonsterSpeed, NewSpeed);
             }
             
-            // Increase speed by 50%
-            float NewSpeed = OriginalMonsterSpeed * 1.5f;
-            SpawnedMonster->MoveSpeed = NewSpeed;
-            
-            // Update character movement component
-            if (SpawnedMonster->GetCharacterMovement())
+            // Show warning
+            if (GEngine)
             {
-                SpawnedMonster->GetCharacterMovement()->MaxWalkSpeed = NewSpeed;
+                GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Orange,
+                    TEXT("⚠️ MONSTER IS NOW FASTER AND BIGGER!"));
             }
             
-            // GROW MONSTER TO 1.7x SIZE - Make it terrifying!
-            FVector NewScale = FVector(1.7f, 1.7f, 1.7f);
-            SpawnedMonster->SetActorScale3D(NewScale);
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] 👹 MONSTER GREW TO 1.7x SIZE! 👹"));
-            
-            // Play transformation sound if set (different from speed boost sound)
+            // Play transformation sound if set
             if (MonsterTransformSound)
             {
                 UGameplayStatics::PlaySound2D(GetWorld(), MonsterTransformSound, 1.0f);
-                UE_LOG(LogTemp, Warning, TEXT("[GameMode] 🔊 MONSTER TRANSFORMATION SOUND! 🔊"));
             }
             else if (MonsterSpeedBoostSound)
             {
-                // Fallback to speed boost sound if transform sound not set
                 UGameplayStatics::PlaySound2D(GetWorld(), MonsterSpeedBoostSound, 1.0f);
-                UE_LOG(LogTemp, Warning, TEXT("[GameMode] ⚡ MONSTER SPEED INCREASED! ⚡"));
             }
-            
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster speed boosted from %.0f to %.0f (Last 30 seconds!)"), 
-                   OriginalMonsterSpeed, NewSpeed);
         }
         
         // Time's up
@@ -741,10 +704,10 @@ void AMazeGameMode::Tick(float DeltaTime)
                 if (GEngine)
                 {
                     GEngine->Exec(GetWorld(), *FString::Printf(TEXT("r.ScreenPercentage %f"), OriginalResolution));
-                    UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] ✓ Effect expired! Resolution restored to %.0f%%"), OriginalResolution);
+                    UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Effect expired! Resolution restored to %.0f%%"), OriginalResolution);
                     
                     GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, 
-                        TEXT("✓ Vision and speed restored!"));
+                        TEXT("Vision and speed restored!"));
                 }
                 
                 // Restore player speed
@@ -754,31 +717,35 @@ void AMazeGameMode::Tick(float DeltaTime)
                     if (PlayerChar && PlayerChar->GetCharacterMovement())
                     {
                         PlayerChar->GetCharacterMovement()->MaxWalkSpeed = OriginalPlayerSpeed;
-                        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] ✓ Player speed restored to %.0f"), OriginalPlayerSpeed);
+                        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Player speed restored to %.0f"), OriginalPlayerSpeed);
                     }
                 }
             }
         }
         
-        // MAZE TRAP: Check for trap trigger at 60 seconds elapsed
-        if (!bMazeTrapTriggered && CurrentGameState == EGameState::Playing)
+        // Level 5 Blood Moon mechanics
+        if (CurrentLevel == 5 && CurrentGameState == EGameState::Playing && LevelManager)
         {
-            float ElapsedTime = TotalGameTime - RemainingTime;
-            if (ElapsedTime >= 60.0f)
+            FLevelConfig Config = LevelManager->GetLevelConfig(5);
+            
+            // Second monster spawn at 1:30
+            if (!bSecondMonsterSpawned && Config.SecondMonsterSpawnTime > 0.0f)
             {
-                UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] ⚠️ 60 seconds elapsed - triggering maze trap!"));
-                TriggerMazeTrap();
+                if (RemainingTime <= Config.SecondMonsterSpawnTime)
+                {
+                    SpawnSecondMonster();
+                    bSecondMonsterSpawned = true;
+                }
             }
-        }
-        
-        // MAZE TRAP: Handle trap countdown
-        if (bPlayerTrapped)
-        {
-            TrapDuration -= DeltaTime;
-            if (TrapDuration <= 0.0f)
+            
+            // Aggressive mode at 1:00
+            if (!bAggressiveModeActivated && Config.AggressiveModeTime > 0.0f)
             {
-                UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Trap duration expired - releasing player"));
-                ReleaseTrap();
+                if (RemainingTime <= Config.AggressiveModeTime)
+                {
+                    ActivateAggressiveMode();
+                    bAggressiveModeActivated = true;
+                }
             }
         }
     }
@@ -796,15 +763,7 @@ void AMazeGameMode::SpawnPlayer()
     AMazeCell* EscapeCell = MazeManager->GetEscapeCell();
     int32 Attempts = 0;
     int32 MaxAttempts = 100;
-    
-    // CRITICAL FIX: Scale minimum distance based on maze size to prevent instant wins
-    // For small mazes (2x2), use at least 30% of diagonal distance
-    float MazeDiagonal = FMath::Sqrt((float)(FMath::Square(MazeManager->Rows) + FMath::Square(MazeManager->Cols)));
-    float MinCellsAway = FMath::Max(7.0f, MazeDiagonal * 0.3f);  // At least 7 cells OR 30% of diagonal
-    float MinDistanceFromEscape = MazeManager->CellSize * MinCellsAway;
-    
-    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Spawn distance: %.1f cells (maze: %dx%d, diagonal: %.1f)"), 
-           MinCellsAway, MazeManager->Rows, MazeManager->Cols, MazeDiagonal);
+    float MinDistanceFromEscape = MazeManager->CellSize * 7.0f; // At least 7 cells away
     
     if (bSpawnRandomly)
     {
@@ -847,14 +806,7 @@ void AMazeGameMode::SpawnPlayer()
         FVector CellLocation = SpawnCell->GetActorLocation();
         
         // FIXED: Spawn at exact center - no random offset
-        // Random offset was causing spawns at wall edges
-        float SafeOffset = 0.0f;  // Changed from 200.0f to 0.0f
-        float RandomX = 0.0f;  // No random offset
-        float RandomY = 0.0f;  // No random offset
-        
         FVector SpawnLocation = CellLocation;
-        SpawnLocation.X += RandomX;
-        SpawnLocation.Y += RandomY;
         SpawnLocation.Z = 100.0f; // 1 meter above ground
         
         Player->SetActorLocation(SpawnLocation);
@@ -862,33 +814,8 @@ void AMazeGameMode::SpawnPlayer()
         
         InitialPlayerLocation = SpawnLocation;
         
-        // Add flashlight to player (fixed position, increased range)
-        PlayerFlashlight = NewObject<USpotLightComponent>(Player);
-        if (PlayerFlashlight)
-        {
-            PlayerFlashlight->RegisterComponent();
-            PlayerFlashlight->AttachToComponent(Player->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
-            
-            // Enhanced flashlight settings with fixed position
-            PlayerFlashlight->SetIntensity(6000.0f);  // Increased brightness
-            PlayerFlashlight->SetInnerConeAngle(25.0f);  // Wider inner cone
-            PlayerFlashlight->SetOuterConeAngle(50.0f);  // Wider outer cone
-            PlayerFlashlight->SetAttenuationRadius(2500.0f);  // Significantly increased range
-            PlayerFlashlight->SetLightColor(FLinearColor(1.0f, 0.95f, 0.85f));  // Warm light
-            PlayerFlashlight->SetCastShadows(true);
-            
-            // Fixed position: at head level, pointing slightly downward
-            PlayerFlashlight->SetRelativeLocation(FVector(50.0f, 0.0f, 60.0f));
-            PlayerFlashlight->SetRelativeRotation(FRotator(-15.0f, 0.0f, 0.0f));  // Slight downward angle
-            
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Fixed-position flashlight attached to player"));
-        }
-        
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Player spawned at cell [%d,%d]"), 
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Player spawned at cell [%d,%d]"), 
                SpawnCell->Row, SpawnCell->Col);
-        UE_LOG(LogTemp, Warning, TEXT("  Cell Location: %s"), *CellLocation.ToString());
-        UE_LOG(LogTemp, Warning, TEXT("  Player Location: %s (offset: %.0f, %.0f)"), 
-               *SpawnLocation.ToString(), RandomX, RandomY);
     }
 }
 
@@ -935,7 +862,7 @@ void AMazeGameMode::SpawnGoldenStar()
         
         if (SpawnedStar)
         {
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓ Golden Star spawned at [%d,%d]"), 
+            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Golden Star spawned at [%d,%d]"), 
                    StarCell->Row, StarCell->Col);
         }
     }
@@ -987,33 +914,41 @@ void AMazeGameMode::SpawnMonster()
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	
-	SpawnedMonster = GetWorld()->SpawnActor<AMonsterAI>(
+	AMonsterAI* Monster = GetWorld()->SpawnActor<AMonsterAI>(
 		MonsterClass, 
 		MonsterLocation, 
 		FRotator::ZeroRotator, 
 		SpawnParams
 	);
 	
-	if (SpawnedMonster)
+	if (Monster)
     {
-        SpawnedMonster->StartChasing(Player);
+        Monster->StartChasing(Player);
         
         // Play growl sound on initial spawn only
-        if (SpawnedMonster->GrowlSound)
+        if (Monster->GrowlSound)
         {
-            UGameplayStatics::PlaySound2D(GetWorld(), SpawnedMonster->GrowlSound, 0.9f);
-            UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster growl sound played on initial spawn"));
+            UGameplayStatics::PlaySound2D(GetWorld(), Monster->GrowlSound, 0.9f);
         }
         
+        // Show monster spawn warning
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+                TEXT("⚠️ MONSTER SPAWNED! RUN!"));
+        }
+        
+        // Add to monsters array
+        SpawnedMonsters.Add(Monster);
         bMonsterSpawned = true;
         
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] ✓✓✓ MONSTER SPAWNED - RUN! ✓✓✓"));
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster spawned (Total: %d)"), SpawnedMonsters.Num());
+        
+        UE_LOG(LogTemp, Warning, TEXT("[GameMode] MONSTER SPAWNED - RUN!"));
         UE_LOG(LogTemp, Warning, TEXT("[GameMode] Monster at [%d,%d], Player at initial location"), 
                MonsterCell->Row, MonsterCell->Col);
     }
 }
-
-
 
 void AMazeGameMode::SpawnStars()
 {
@@ -1043,13 +978,11 @@ void AMazeGameMode::SpawnStars()
 		}
 	}
 }
-
+// MazeGameMode.cpp - PART 2 (Continue from Part 1)
 
 void AMazeGameMode::CheckWinCondition()
 {
-    // CRITICAL FIX: Prevent multiple win triggers
     if (!Player || !MazeManager || CurrentGameState != EGameState::Playing) return;
-    if (CurrentGameState == EGameState::Won) return;
     
     FVector PlayerLoc = Player->GetActorLocation();
     float CellSize = MazeManager->CellSize;
@@ -1060,7 +993,6 @@ void AMazeGameMode::CheckWinCondition()
     FVector EscapeCellLoc = EscapeCell->GetActorLocation();
     
     // ONLY win if player has moved BEYOND the maze boundary through the escape opening
-    // Increased threshold to 0.6 (60% of cell size) to make it more obvious
     bool bEscaped = false;
     
     // Check if player has exited through the escape opening
@@ -1093,11 +1025,16 @@ void AMazeGameMode::CheckWinCondition()
 
 void AMazeGameMode::CheckLoseCondition()
 {
-    if (!SpawnedMonster || !Player || CurrentGameState != EGameState::Playing) return;
+    if (SpawnedMonsters.Num() == 0 || !Player || CurrentGameState != EGameState::Playing) return;
     
-    if (SpawnedMonster->HasCaughtPlayer())
+    // Check if any monster caught the player
+    for (AMonsterAI* Monster : SpawnedMonsters)
     {
-        PlayerLost("Monster caught you!");
+        if (Monster && Monster->HasCaughtPlayer())
+        {
+            PlayerLost("Monster caught you!");
+            return;
+        }
     }
 }
 
@@ -1105,30 +1042,7 @@ void AMazeGameMode::PlayerWon()
 {
     if (CurrentGameState == EGameState::Playing)
     {
-        CurrentGameState = EGameState::Won;
-        
-        // Play win sound
-        if (WinSound)
-        {
-            UGameplayStatics::PlaySound2D(GetWorld(), WinSound, 0.8f);
-        }
-        
-        // Hide HUD
-        if (HUDWidget)
-        {
-            HUDWidget->RemoveFromParent();
-        }
-        
-        if (SpawnedMonster)
-        {
-            SpawnedMonster->StopChasing();
-        }
-        
-        UE_LOG(LogTemp, Warning, TEXT("========================================"));
-        UE_LOG(LogTemp, Warning, TEXT("=== ✓✓✓ VICTORY! PLAYER ESCAPED! ✓✓✓ ==="));
-        UE_LOG(LogTemp, Warning, TEXT("========================================"));
-        
-        ShowGameOverScreen(true);
+        CompleteLevel();  // Use level progression system
     }
 }
 
@@ -1137,6 +1051,13 @@ void AMazeGameMode::PlayerLost(const FString& Reason)
     if (CurrentGameState == EGameState::Playing)
     {
         CurrentGameState = EGameState::Lost;
+        
+        // Record death in level progression
+        if (LevelManager)
+        {
+            bool bByMonster = Reason.Contains("Monster") || Reason.Contains("caught");
+            LevelManager->RecordDeath(CurrentLevel, bByMonster);
+        }
         
         // Play lose sound
         if (LoseSound)
@@ -1257,35 +1178,230 @@ void AMazeGameMode::ResumeGame()
     }
 }
 
-
 void AMazeGameMode::RestartGame()
 {
-    // Show loading screen immediately (reduced to 2s for better UX)
-    ShowLoadingScreen("Returning to Menu...", 2.0f);
+    // Show loading screen immediately
+    ShowLoadingScreen("Restarting...", 3.0f);  // Minimum 3 seconds
     
-    UE_LOG(LogTemp, Error, TEXT("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"));
-    UE_LOG(LogTemp, Error, TEXT("!!! RESTART GAME FUNCTION CALLED !!!"));
-    UE_LOG(LogTemp, Error, TEXT("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"));
-    UE_LOG(LogTemp, Warning, TEXT("[GameMode] ========== RESTARTING GAME =========="));
+    UE_LOG(LogTemp, Warning, TEXT("[RestartGame] Restarting current level/game..."));
     
-    // CRITICAL FIX: Destroy flashlight to prevent memory leak
-    if (PlayerFlashlight)
+    // CRITICAL FIX: Reset resolution before restart
+    if (GEngine)
     {
-        PlayerFlashlight->DestroyComponent();
-        PlayerFlashlight = nullptr;
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Flashlight destroyed to prevent memory leak"));
+        GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 100"));
+        UE_LOG(LogTemp, Warning, TEXT("[Restart] Resolution reset to 100%%"));
     }
     
-    // Unpause first
+    // Reset muddy effect state
+    bMuddyEffectActive = false;
+    MuddyEffectTimer = 0.0f;
+    
+    // Reset player speed before restart
+    if (Player)
+    {
+        ACharacter* PlayerChar = Cast<ACharacter>(Player);
+        if (PlayerChar && PlayerChar->GetCharacterMovement())
+        {
+            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = 600.0f;
+            UE_LOG(LogTemp, Warning, TEXT("[Restart] Player speed reset to 600"));
+        }
+    }
+    
+    // Unpause if paused
     UGameplayStatics::SetGamePaused(GetWorld(), false);
     
-    // Remove all UI widgets
-    if (CurrentWidget)
+    // Hide pause menu
+    if (PauseMenuWidget)
     {
-        CurrentWidget->RemoveFromParent();
-        CurrentWidget = nullptr;
+        PauseMenuWidget->RemoveFromParent();
+        PauseMenuWidget = nullptr;
     }
     
+    // CRITICAL FIX: Hide Win/Lose widgets on restart!
+    TArray<UUserWidget*> FoundWidgets;
+    UWidgetBlueprintLibrary::GetAllWidgetsOfClass(GetWorld(), FoundWidgets, UUserWidget::StaticClass());
+    for (UUserWidget* Widget : FoundWidgets)
+    {
+        if (Widget && Widget->IsInViewport())
+        {
+            FString WidgetName = Widget->GetName();
+            // Remove Win and Lose widgets
+            if (WidgetName.Contains("Win") || WidgetName.Contains("Lose") || 
+                WidgetName.Contains("Victory") || WidgetName.Contains("Defeat"))
+            {
+                Widget->RemoveFromParent();
+                UE_LOG(LogTemp, Warning, TEXT("[RestartGame] Removed widget: %s"), *WidgetName);
+            }
+        }
+    }
+    
+    // FIX: Delay restart to allow loading screen to show
+    FTimerHandle RestartTimer;
+    GetWorldTimerManager().SetTimer(RestartTimer, [this]()
+    {
+        // FIX: Check if in Free2Play mode or Level mode
+        if (bInMenuPreview || CurrentLevel == 0)
+        {
+            // Free2Play mode - complete cleanup and regenerate
+            UE_LOG(LogTemp, Warning, TEXT("[RestartGame] Free2Play mode - complete restart"));
+            
+            // COMPLETE CLEANUP - Delete everything
+            // 1. Destroy all maze cells
+            if (MazeManager)
+            {
+                for (auto& Row : MazeManager->MazeGrid)
+                {
+                    for (AMazeCell* Cell : Row)
+                    {
+                        if (Cell)
+                        {
+                            Cell->Destroy();
+                        }
+                    }
+                }
+                MazeManager->MazeGrid.Empty();
+            }
+            
+            // 2. Destroy monster
+            // Destroy all monsters
+            for (AMonsterAI* Monster : SpawnedMonsters)
+            {
+                if (Monster)
+                {
+                    Monster->Destroy();
+                }
+            }
+            SpawnedMonsters.Empty();
+            
+            // 3. Destroy star
+            if (SpawnedStar)
+            {
+                SpawnedStar->Destroy();
+                SpawnedStar = nullptr;
+            }
+            
+            // 4. Destroy flashlight
+            if (PlayerFlashlight)
+            {
+                PlayerFlashlight->DestroyComponent();
+                PlayerFlashlight = nullptr;
+            }
+            
+            // 5. Destroy player
+            if (Player)
+            {
+                Player->Destroy();
+                Player = nullptr;
+            }
+            
+            // 6. Destroy muddy patches
+            TArray<AActor*> MuddyPatches;
+            UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMuddyPatch::StaticClass(), MuddyPatches);
+            for (AActor* Patch : MuddyPatches)
+            {
+                Patch->Destroy();
+            }
+            
+            // 7. Destroy safe zones
+            if (SpawnedSafeZone)
+            {
+                SpawnedSafeZone->Destroy();
+                SpawnedSafeZone = nullptr;
+            }
+            
+            // FIX ISSUE #3: Destroy HUD/Timer widget
+            if (HUDWidget)
+            {
+                HUDWidget->RemoveFromParent();
+                HUDWidget = nullptr;
+            }
+            
+            // Reset all flags
+            bMonsterSpawned = false;
+            bMonsterSpeedBoosted = false;
+            bSafeZoneActive = false;
+            
+            // NOW regenerate everything fresh
+            MazeManager->SetMazeSize(CurrentMazeRows, CurrentMazeCols);
+            MazeManager->GenerateMazeImmediate();
+            
+            SpawnPlayer();
+            SpawnGoldenStar();
+            CreatePlayerFlashlight();
+            
+            // Restart game
+            StartGame();
+        }
+        else
+        {
+            // Level mode - complete cleanup and restart level
+            UE_LOG(LogTemp, Warning, TEXT("[RestartGame] Level mode - restarting Level %d"), CurrentLevel);
+            
+            // COMPLETE CLEANUP - Delete everything
+            CleanupBeforeLevel();
+            
+            // FIX: Also destroy HUD/Timer in Level mode
+            if (HUDWidget)
+            {
+                HUDWidget->RemoveFromParent();
+                HUDWidget = nullptr;
+            }
+            
+            // Restart the same level (this will regenerate maze, spawn player, etc.)
+            StartLevel(CurrentLevel);
+        }
+        
+        // Set input mode back to game
+        APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+        if (PC)
+        {
+            PC->bShowMouseCursor = false;
+            PC->SetInputMode(FInputModeGameOnly());
+        }
+        
+        UE_LOG(LogTemp, Warning, TEXT("[RestartGame] Restart complete!"));
+        
+    }, 0.5f, false);
+}
+
+void AMazeGameMode::QuitGame()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Quitting game..."));
+    
+    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+    if (PC)
+    {
+        PC->ConsoleCommand("quit");
+    }
+}
+
+void AMazeGameMode::ReturnToMainMenu()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Returning to main menu with complete cleanup..."));
+    
+    // 1. Stop all timers for this object
+    GetWorldTimerManager().ClearAllTimersForObject(this);
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] All timers cleared"));
+    
+    // 2. Stop credits music if playing
+    if (CreditsMusicComponent && CreditsMusicComponent->IsPlaying())
+    {
+        CreditsMusicComponent->Stop();
+        CreditsMusicComponent = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Credits music stopped"));
+    }
+    
+    // 3. Complete cleanup of all game entities
+    CleanupBeforeLevel();
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Game entities cleaned up"));
+    
+    // 4. Reset game state
+    CurrentGameState = EGameState::NotStarted;
+    CurrentLevel = 0;
+    bInMenuPreview = true;
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Game state reset to Menu"));
+    
+    // 5. Hide all UI widgets
     if (HUDWidget)
     {
         HUDWidget->RemoveFromParent();
@@ -1298,98 +1414,66 @@ void AMazeGameMode::RestartGame()
         PauseMenuWidget = nullptr;
     }
     
-    // Reset input mode
-    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-    if (PC)
+    if (SettingsMenuWidget)
     {
-        PC->bShowMouseCursor = false;
-        PC->SetInputMode(FInputModeGameOnly());
-        UE_LOG(LogTemp, Warning, TEXT("[GameMode] Input mode reset to game only"));
+        SettingsMenuWidget->RemoveFromParent();
+        SettingsMenuWidget = nullptr;
     }
     
-    // Reload level
-    FString CurrentLevel = UGameplayStatics::GetCurrentLevelName(GetWorld(), true);
-    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Reloading level: %s"), *CurrentLevel);
-    UGameplayStatics::OpenLevel(this, FName(*CurrentLevel), false);
-}
-
-// ==================== OPTIONS MENU FUNCTIONS ====================
-
-void AMazeGameMode::ShowOptionsMenu()
-{
-    UE_LOG(LogTemp, Warning, TEXT("[Options] Opening Options menu"));
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] All UI widgets hidden"));
     
-    // Hide main menu but keep the preview active
-    if (MainMenuWidget)
+    // 6. Reset blood moon lighting (Level 5)
+    TArray<AActor*> FoundLights;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADirectionalLight::StaticClass(), FoundLights);
+    for (AActor* LightActor : FoundLights)
     {
-        MainMenuWidget->RemoveFromParent();
-        UE_LOG(LogTemp, Warning, TEXT("[Options] Main menu hidden"));
-    }
-    
-    // Create and show options menu
-    if (OptionsMenuWidgetClass)
-    {
-        if (!OptionsMenuWidget)
+        ADirectionalLight* DirLight = Cast<ADirectionalLight>(LightActor);
+        if (DirLight)
         {
-            OptionsMenuWidget = CreateWidget<UUserWidget>(GetWorld(), OptionsMenuWidgetClass);
-        }
-        
-        if (OptionsMenuWidget)
-        {
-            OptionsMenuWidget->AddToViewport(200); // High Z-order
-            
-            APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-            if (PC)
+            // Reset to normal white light
+            DirLight->SetLightColor(FLinearColor::White);
+            if (DirLight->GetLightComponent())
             {
-                PC->bShowMouseCursor = true;
-                PC->SetInputMode(FInputModeUIOnly());
+                DirLight->GetLightComponent()->SetIntensity(1.0f);  // Normal intensity
             }
-            
-            UE_LOG(LogTemp, Warning, TEXT("✓ Options menu displayed"));
+            UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Directional light reset to normal"));
         }
     }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("⚠ OptionsMenuWidgetClass not set!"));
-    }
-}
-
-void AMazeGameMode::CloseOptionsMenu()
-{
-    UE_LOG(LogTemp, Warning, TEXT("[Options] Closing Options menu"));
     
-    if (OptionsMenuWidget)
+    // 7. Restore audio (ensure game sounds work)
+    if (UWorld* World = GetWorld())
     {
-        OptionsMenuWidget->RemoveFromParent();
-        OptionsMenuWidget = nullptr;
+        if (FAudioDeviceHandle AudioDeviceHandle = World->GetAudioDevice())
+        {
+            if (FAudioDevice* AudioDevice = AudioDeviceHandle.GetAudioDevice())
+            {
+                AudioDevice->SetTransientPrimaryVolume(1.0f);
+                UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Audio restored"));
+            }
+        }
     }
     
-    // Show main menu again
+    // 8. Reset time dilation
+    UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
+    
+    // 9. Show main menu
     ShowMainMenu();
     
-    // Return to main menu input mode
-    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-    if (PC)
-    {
-        PC->bShowMouseCursor = true;
-        PC->SetInputMode(FInputModeUIOnly());
-    }
+    UE_LOG(LogTemp, Warning, TEXT("[ReturnToMainMenu] Complete! Main menu displayed"));
 }
-
-// ==================== SETTINGS FUNCTIONS ====================
 
 void AMazeGameMode::ShowSettingsMenu()
 {
-    UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Opening Free2Play Mode menu"));
+    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Showing settings menu (Free2Play)"));
     
-    // Hide main menu but keep the preview active
+    // FIX: Remove main menu completely and recreate on return
     if (MainMenuWidget)
     {
         MainMenuWidget->RemoveFromParent();
-        UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Main menu hidden"));
+        MainMenuWidget = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[ShowSettingsMenu] Main menu removed"));
     }
     
-    // Create and show settings menu (Free2Play mode)
     if (SettingsMenuWidgetClass)
     {
         if (!SettingsMenuWidget)
@@ -1399,7 +1483,7 @@ void AMazeGameMode::ShowSettingsMenu()
         
         if (SettingsMenuWidget)
         {
-            SettingsMenuWidget->AddToViewport(200); // High Z-order
+            SettingsMenuWidget->AddToViewport(200);
             
             APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
             if (PC)
@@ -1407,110 +1491,815 @@ void AMazeGameMode::ShowSettingsMenu()
                 PC->bShowMouseCursor = true;
                 PC->SetInputMode(FInputModeUIOnly());
             }
-            
-            UE_LOG(LogTemp, Warning, TEXT("✓ Free2Play Mode menu displayed"));
         }
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("⚠ SettingsMenuWidgetClass not set!"));
     }
 }
 
-void AMazeGameMode::CloseSettingsMenu()
+void AMazeGameMode::HideSettingsMenu()
 {
-    UE_LOG(LogTemp, Warning, TEXT("[Free2Play] Closing Free2Play Mode menu"));
+    UE_LOG(LogTemp, Warning, TEXT("[GameMode] Hiding settings menu"));
     
     if (SettingsMenuWidget)
     {
         SettingsMenuWidget->RemoveFromParent();
         SettingsMenuWidget = nullptr;
     }
-}
-
-void AMazeGameMode::SetMazeRows(int32 NewRows)
-{
-    CurrentMazeRows = FMath::Clamp(NewRows, 1, 30);
-    UE_LOG(LogTemp, Log, TEXT("[Settings] Maze rows set to %d"), CurrentMazeRows);
-}
-
-void AMazeGameMode::SetMazeCols(int32 NewCols)
-{
-    CurrentMazeCols = FMath::Clamp(NewCols, 1, 30);
-    UE_LOG(LogTemp, Log, TEXT("[Settings] Maze cols set to %d"), CurrentMazeCols);
-}
-
-void AMazeGameMode::SaveSettings()
-{
-    UE_LOG(LogTemp, Warning, TEXT("[Settings] Saving settings: %dx%d"), CurrentMazeRows, CurrentMazeCols);
     
-    // Check if maze size changed
-    bool bSizeChanged = false;
-    if (MazeManager)
+    // Recreate main menu
+    ShowMainMenu();
+}
+
+void AMazeGameMode::SaveSettings(int32 NewRows, int32 NewCols)
+{
+    UE_LOG(LogTemp, Warning, TEXT("[Settings] Saving maze size: %dx%d"), NewRows, NewCols);
+    
+    CurrentMazeRows = NewRows;
+    CurrentMazeCols = NewCols;
+    
+    // Save to game settings
+    UMazeGameSettings* Settings = GetMutableDefault<UMazeGameSettings>();
+    if (Settings)
     {
-        bSizeChanged = (MazeManager->Rows != CurrentMazeRows || MazeManager->Cols != CurrentMazeCols);
-        UE_LOG(LogTemp, Warning, TEXT("[Settings] Current maze: %dx%d, New settings: %dx%d, Changed: %s"), 
-               MazeManager->Rows, MazeManager->Cols, CurrentMazeRows, CurrentMazeCols, 
-               bSizeChanged ? TEXT("YES") : TEXT("NO"));
+        Settings->MazeRows = NewRows;
+        Settings->MazeCols = NewCols;
+        Settings->SaveConfig();
+        
+        UE_LOG(LogTemp, Warning, TEXT("[Settings] Settings saved to config file"));
+    }
+}
+
+void AMazeGameMode::LoadSettings()
+{
+    UMazeGameSettings* Settings = GetMutableDefault<UMazeGameSettings>();
+    if (Settings)
+    {
+        CurrentMazeRows = Settings->MazeRows;
+        CurrentMazeCols = Settings->MazeCols;
+        
+        UE_LOG(LogTemp, Warning, TEXT("[Settings] Settings loaded: %dx%d"), CurrentMazeRows, CurrentMazeCols);
+    }
+}
+
+void AMazeGameMode::ShowLoadingScreen(const FString& Message, float Duration)
+{
+    if (!LoadingScreenWidgetClass)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Loading] LoadingScreenWidgetClass not set"));
+        return;
     }
     
-    // Create or update save game object
-    UMazeGameSettings* SaveGameInstance = Cast<UMazeGameSettings>(
-        UGameplayStatics::CreateSaveGameObject(UMazeGameSettings::StaticClass())
-    );
-    
-    if (SaveGameInstance)
+    ULoadingScreenWidget* LoadingScreen = CreateWidget<ULoadingScreenWidget>(GetWorld(), LoadingScreenWidgetClass);
+    if (LoadingScreen)
     {
-        SaveGameInstance->MazeRows = CurrentMazeRows;
-        SaveGameInstance->MazeCols = CurrentMazeCols;
-        SaveGameInstance->MouseSensitivity = MouseSensitivity;
-        SaveGameInstance->GameVolume = GameVolume;
+        LoadingScreen->SetInstructions(Message);
+        LoadingScreen->AddToViewport(999); // Highest Z-order
         
-        bool bSuccess = UGameplayStatics::SaveGameToSlot(
-            SaveGameInstance,
-            UMazeGameSettings::SaveSlotName,
-            UMazeGameSettings::UserIndex
-        );
-        
-        if (bSuccess)
+        // Remove after duration
+        FTimerHandle LoadingTimer;
+        GetWorldTimerManager().SetTimer(LoadingTimer, [LoadingScreen]()
         {
-            UE_LOG(LogTemp, Warning, TEXT("✓ Settings saved successfully!"));
-            
-            // IMMEDIATE APPLY: Regenerate maze if size changed
-            if (bSizeChanged && MazeManager)
+            if (LoadingScreen)
             {
-                UE_LOG(LogTemp, Warning, TEXT("[Settings] ========================================"));
-                UE_LOG(LogTemp, Warning, TEXT("[Settings] REGENERATING MAZE WITH NEW SIZE..."));
-                UE_LOG(LogTemp, Warning, TEXT("[Settings] ========================================"));
+                LoadingScreen->RemoveFromParent();
+            }
+        }, Duration, false);
+        
+        UE_LOG(LogTemp, Warning, TEXT("[Loading] Showing loading screen: %s"), *Message);
+    }
+}
+
+void AMazeGameMode::ApplyMuddyEffect(float Duration)
+{
+    if (bMuddyEffectActive)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Already active, extending duration"));
+        MuddyEffectTimer = Duration;
+        return;
+    }
+    
+    bMuddyEffectActive = true;
+    MuddyEffectTimer = Duration;
+    
+    // FIX ISSUE #2: Reduce resolution to 10% (was 50%)
+    if (GEngine)
+    {
+        GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 10"));
+        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] ✗ Resolution reduced to 10%%"));
+        
+        GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red, 
+            FString::Printf(TEXT("✗ MUDDY! Vision blurred for %.0f seconds!"), Duration));
+    }
+    
+    // FIX ISSUE #2: Reduce player speed much more (was 60%, now 30%)
+    if (Player)
+    {
+        ACharacter* PlayerChar = Cast<ACharacter>(Player);
+        if (PlayerChar && PlayerChar->GetCharacterMovement())
+        {
+            float CurrentSpeed = PlayerChar->GetCharacterMovement()->MaxWalkSpeed;
+            OriginalPlayerSpeed = CurrentSpeed;
+            float NewSpeed = CurrentSpeed * 0.3f; // 30% of original speed (very slow)
+            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = NewSpeed;
+            UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] ✗ Player speed reduced from %.0f to %.0f"), CurrentSpeed, NewSpeed);
+        }
+    }
+}
+
+void AMazeGameMode::SpawnTrapCells(int32 Count)
+{
+    if (!TrapCellClass || !MazeManager)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[SpawnTrapCells] TrapCellClass or MazeManager not set"));
+        return;
+    }
+    
+    // Get all maze cells
+    TArray<AMazeCell*> AllCells;
+    for (int32 Row = 0; Row < CurrentMazeRows; Row++)
+    {
+        for (int32 Col = 0; Col < CurrentMazeCols; Col++)
+        {
+            AMazeCell* Cell = MazeManager->GetCell(Row, Col);
+            if (Cell)
+            {
+                AllCells.Add(Cell);
+            }
+        }
+    }
+    
+    if (AllCells.Num() == 0)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[SpawnTrapCells] No maze cells found!"));
+        return;
+    }
+    
+    // Randomly select cells for traps (avoid start cell at 0,0 and escape cell)
+    int32 SpawnedCount = 0;
+    for (int32 i = 0; i < Count && AllCells.Num() > 0; i++)
+    {
+        // Pick random cell
+        int32 RandomIndex = FMath::RandRange(0, AllCells.Num() - 1);
+        AMazeCell* Cell = AllCells[RandomIndex];
+        
+        // Skip start cell and escape cell
+        if ((Cell->Row == 0 && Cell->Col == 0) || Cell->bIsEscapeCell)
+        {
+            AllCells.RemoveAt(RandomIndex);
+            i--; // Try again
+            continue;
+        }
+        
+        // Spawn trap cell
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        
+        ATrapCell* TrapCell = GetWorld()->SpawnActor<ATrapCell>(TrapCellClass, FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+        if (TrapCell)
+        {
+            TrapCell->Initialize(Cell, MazeManager->CellSize);
+            SpawnedTrapCells.Add(TrapCell);
+            SpawnedCount++;
+            UE_LOG(LogTemp, Warning, TEXT("[SpawnTrapCells] Spawned trap cell at [%d,%d]"), Cell->Row, Cell->Col);
+        }
+        
+        AllCells.RemoveAt(RandomIndex);
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[SpawnTrapCells] Spawned %d trap cells"), SpawnedCount);
+}
+
+// ==================== LEVEL PROGRESSION FUNCTIONS ====================
+
+void AMazeGameMode::StartLevel(int32 LevelNumber)
+{
+    if (!LevelManager)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[StartLevel] LevelManager not found!"));
+        return;
+    }
+    
+    CurrentLevel = LevelNumber;
+    FLevelConfig Config = LevelManager->GetLevelConfig(LevelNumber);
+    
+    UE_LOG(LogTemp, Warning, TEXT("[StartLevel] Starting Level %d: %s"), LevelNumber, *Config.LevelName);
+    
+    // Record level attempt
+    LevelManager->RecordLevelAttempt(LevelNumber);
+    
+    // Show level briefing
+    if (LoadingScreenWidgetClass)
+    {
+        ULoadingScreenWidget* Briefing = CreateWidget<ULoadingScreenWidget>(GetWorld(), LoadingScreenWidgetClass);
+        if (Briefing)
+        {
+            FString BriefingText = FString::Printf(TEXT("LEVEL %d: %s\n\n"), LevelNumber, *Config.LevelName);
+            for (const FString& Msg : Config.BriefingMessages)
+            {
+                BriefingText += Msg + TEXT("\n");
+            }
+            
+            Briefing->SetInstructions(BriefingText);
+            Briefing->AddToViewport(999);
+            
+            // Remove briefing after 8 seconds and start level
+            FTimerHandle BriefingTimer;
+            GetWorldTimerManager().SetTimer(BriefingTimer, [this, Briefing, Config, LevelNumber]()
+            {
+                Briefing->RemoveFromParent();
                 
-                // Get old cell count for verification
-                int32 OldCellCount = 0;
-                for (const auto& Row : MazeManager->MazeGrid)
-                {
-                    OldCellCount += Row.Num();
-                }
+                // Apply level configuration
+                CurrentMazeRows = Config.MazeRows;
+                CurrentMazeCols = Config.MazeCols;
+                TotalGameTime = Config.TimeLimit;
+                MonsterSpawnTime = Config.MonsterSpawnDelay;
                 
-                // Apply new size and regenerate
-                MazeManager->SetMazeSize(CurrentMazeRows, CurrentMazeCols);
+                // Complete cleanup before starting
+                CleanupBeforeLevel();
+                
+                // Generate new maze
+                MazeManager->SetMazeSize(Config.MazeRows, Config.MazeCols);
                 MazeManager->GenerateMazeImmediate();
                 bMazeGenerated = true;
                 
-                // Verify regeneration
-                int32 NewCellCount = 0;
-                for (const auto& Row : MazeManager->MazeGrid)
+                // Spawn entities
+                SpawnStars();
+                SpawnPlayer();
+                CreatePlayerFlashlight();
+                // Spawn golden star (if enabled for this level)
+                if (Config.bEnableGoldenStar)
                 {
-                    NewCellCount += Row.Num();
+                    SpawnGoldenStar();
+                }
+                else
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("[Level %d] 🔴 Golden star disabled - PURE SURVIVAL MODE!"), LevelNumber);
+                    if (GEngine)
+                    {
+                        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+                            TEXT("🔴 NO GOLDEN STAR - SURVIVE TO ESCAPE!"));
+                    }
                 }
                 
-                UE_LOG(LogTemp, Warning, TEXT("[Settings] ✓ Maze regenerated!"));
-                UE_LOG(LogTemp, Warning, TEXT("[Settings]   Old cells: %d (%dx%d)"), OldCellCount, MazeManager->Rows, MazeManager->Cols);
-                UE_LOG(LogTemp, Warning, TEXT("[Settings]   New cells: %d (%dx%d)"), NewCellCount, CurrentMazeRows, CurrentMazeCols);
-                UE_LOG(LogTemp, Warning, TEXT("[Settings] ========================================"));
-            }
+                // Spawn muddy patches if configured
+                if (Config.NumMuddyPatches > 0)
+                {
+                    SpawnMuddyPatches(Config.NumMuddyPatches);
+                    
+                    // Spawn trap cells (use config count)
+                    if (Config.NumTrapCells > 0)
+                    {
+                        SpawnTrapCells(Config.NumTrapCells);
+                        UE_LOG(LogTemp, Warning, TEXT("[Level %d] Spawned %d trap cells"), LevelNumber, Config.NumTrapCells);
+                    }
+                }
+                
+                // Spawn safe zone if configured (only for levels 3-5)
+                if (Config.MazeRegenTime > 0.0f && CurrentLevel > 2)
+                {
+                    SpawnSafeZone(Config.MazeRegenTime);
+                    
+                    // Show warning about maze regeneration
+                    if (GEngine)
+                    {
+                        // Calculate REMAINING time when regen happens
+                        float TimeWhenRegenHappens = TotalGameTime - Config.MazeRegenTime;
+                        float RegenMinutes = FMath::FloorToInt(TimeWhenRegenHappens / 60.0f);
+                        float RegenSeconds = FMath::FloorToInt(FMath::Fmod(TimeWhenRegenHappens, 60.0f));
+                        GEngine->AddOnScreenDebugMessage(-1, 8.0f, FColor::Yellow,
+                            FString::Printf(TEXT("⚠️ MAZE WILL REGENERATE AT %02d:%02d REMAINING - REACH SAFE ZONE!"), 
+                            (int32)RegenMinutes, (int32)RegenSeconds));
+                    }
+                }
+                
+                // Start game
+                LevelStartTime = GetWorld()->GetTimeSeconds();
+                StartGame();
+                
+                // Level 5 Blood Moon atmosphere
+                if (CurrentLevel == 5)
+                {
+                    SetBloodMoonAtmosphere();
+                }
+                
+                // Set input mode to game only
+                APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+                if (PC)
+                {
+                    PC->bShowMouseCursor = false;
+                    PC->SetInputMode(FInputModeGameOnly());
+                }
+                
+            }, 8.0f, false);
+        }
+    }
+}
+
+void AMazeGameMode::CompleteLevel()
+{
+    if (CurrentGameState != EGameState::Playing) return;
+    
+    CurrentGameState = EGameState::Won;
+    
+    // Calculate completion time
+    LevelCompletionTime = TotalGameTime - RemainingTime;
+    
+    // Calculate stars
+    StarsEarnedThisLevel = LevelManager->CalculateStarRating(CurrentLevel, LevelCompletionTime);
+    
+    // Record completion
+    LevelManager->RecordLevelCompletion(CurrentLevel, LevelCompletionTime, StarsEarnedThisLevel);
+    
+    // Unlock next level
+    if (CurrentLevel < 5)
+    {
+        LevelManager->UnlockLevel(CurrentLevel + 1);
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CompleteLevel] Level %d completed in %.2f seconds - %d stars!"), 
+           CurrentLevel, LevelCompletionTime, StarsEarnedThisLevel);
+    
+    // Play win sound
+    if (WinSound)
+    {
+        UGameplayStatics::PlaySound2D(GetWorld(), WinSound, 0.8f);
+    }
+    
+    // Hide HUD
+    if (HUDWidget)
+    {
+        HUDWidget->RemoveFromParent();
+    }
+    
+    // Stop all monsters
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster)
+        {
+            Monster->StopChasing();
+        }
+    }
+    
+    // Show completion message
+    if (GEngine)
+    {
+        FString StarText = FString::Printf(TEXT("⭐ %d STAR%s!"), StarsEarnedThisLevel, StarsEarnedThisLevel == 1 ? TEXT("") : TEXT("S"));
+        GEngine->AddOnScreenDebugMessage(-1, 10.0f, FColor::Yellow,
+            FString::Printf(TEXT("🎉 LEVEL %d COMPLETE! %s 🎉"), CurrentLevel, *StarText));
+    }
+    
+    // Wait 3 seconds then proceed
+    FTimerHandle CompletionTimer;
+    GetWorldTimerManager().SetTimer(CompletionTimer, [this]()
+    {
+        if (CurrentLevel == 5)
+        {
+            // Final level - show credits
+            ShowCredits();
         }
         else
         {
-            UE_LOG(LogTemp, Error, TEXT("✗ Failed to save settings!"));
+            // Advance to next level
+            StartLevel(CurrentLevel + 1);
+        }
+    }, 3.0f, false);
+}
+
+void AMazeGameMode::ShowLevelSelectScreen()
+{
+    if (!LevelSelectWidgetClass)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[ShowLevelSelectScreen] LevelSelectWidgetClass not set!"));
+        return;
+    }
+    
+    // FIX #2: Hide main menu properly
+    if (MainMenuWidget)
+    {
+        MainMenuWidget->RemoveFromParent();
+        MainMenuWidget = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[ShowLevelSelectScreen] Main menu removed"));
+    }
+    
+    // FIX #2: Store level select widget reference for proper cleanup
+    if (!LevelSelectWidget)
+    {
+        LevelSelectWidget = CreateWidget<ULevelSelectWidget>(GetWorld(), LevelSelectWidgetClass);
+    }
+    
+    if (LevelSelectWidget)
+    {
+        LevelSelectWidget->AddToViewport(100);
+        
+        APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+        if (PC)
+        {
+            PC->bShowMouseCursor = true;
+            PC->SetInputMode(FInputModeUIOnly());
+        }
+        
+        UE_LOG(LogTemp, Warning, TEXT("[ShowLevelSelectScreen] Level select displayed"));
+    }
+}
+
+void AMazeGameMode::LoadSelectedLevel(int32 LevelNumber)
+{
+    UE_LOG(LogTemp, Warning, TEXT("[LoadSelectedLevel] Loading Level %d"), LevelNumber);
+    
+    // FIX #2: Remove level select widget
+    if (LevelSelectWidget)
+    {
+        LevelSelectWidget->RemoveFromParent();
+        LevelSelectWidget = nullptr;
+        UE_LOG(LogTemp, Warning, TEXT("[LoadSelectedLevel] Level select widget removed"));
+    }
+    
+    // Complete cleanup
+    CleanupBeforeLevel();
+    
+    // Start the selected level
+    StartLevel(LevelNumber);
+}
+
+void AMazeGameMode::ShowCredits()
+{
+    if (!CreditsWidgetClass)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[ShowCredits] CreditsWidgetClass not set!"));
+        ShowMainMenu();  // FIX ISSUE #2: Return to main menu, not restart
+        return;
+    }
+    
+    // FIX: Use member variable instead of local variable to prevent garbage collection!
+    CreditsWidget = CreateWidget<UCreditsWidget>(GetWorld(), CreditsWidgetClass);
+    if (CreditsWidget)
+    {
+        CreditsWidget->AddToViewport(100);
+        
+        // FIX ISSUE #1: Start the rolling animation
+        CreditsWidget->StartCreditsRoll();
+        
+        // Play credits music and store reference
+        if (CreditsMusic)
+        {
+            CreditsMusicComponent = UGameplayStatics::SpawnSound2D(GetWorld(), CreditsMusic, 1.0f);
+            UE_LOG(LogTemp, Warning, TEXT("[ShowCredits] Credits music playing"));
+        }
+        
+        APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+        if (PC)
+        {
+            PC->bShowMouseCursor = true;
+            PC->SetInputMode(FInputModeUIOnly());
+        }
+        
+        UE_LOG(LogTemp, Warning, TEXT("[ShowCredits] Credits widget stored in member variable - will not be garbage collected"));
+    }
+}
+
+void AMazeGameMode::CleanupBeforeLevel()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CleanupBeforeLevel] Cleaning up all entities..."));
+    
+    // Destroy all maze cells
+    if (MazeManager)
+    {
+        for (auto& Row : MazeManager->MazeGrid)
+        {
+            for (AMazeCell* Cell : Row)
+            {
+                if (Cell)
+                {
+                    Cell->Destroy();
+                }
+            }
+        }
+        MazeManager->MazeGrid.Empty();
+    }
+    
+    // Destroy monster
+    // Destroy all monsters
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster)
+        {
+            Monster->Destroy();
+        }
+    }
+    SpawnedMonsters.Empty();
+    
+    // Destroy star
+    if (SpawnedStar)
+    {
+        SpawnedStar->Destroy();
+        SpawnedStar = nullptr;
+    }
+    
+    // Destroy muddy patches
+    TArray<AActor*> MuddyPatches;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMuddyPatch::StaticClass(), MuddyPatches);
+    for (AActor* Patch : MuddyPatches)
+    {
+        Patch->Destroy();
+    }
+    // Cleanup monsters
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster)
+        {
+            Monster->Destroy();
+        }
+    }
+    SpawnedMonsters.Empty();
+    
+    // Destroy safe zones
+    if (SpawnedSafeZone)
+    {
+        SpawnedSafeZone->Destroy();
+        SpawnedSafeZone = nullptr;
+    }
+    
+    // Destroy flashlight
+    if (PlayerFlashlight)
+    {
+        PlayerFlashlight->DestroyComponent();
+        PlayerFlashlight = nullptr;
+    }
+    
+    // Reset flags
+    bMonsterSpawned = false;
+    bMonsterSpeedBoosted = false;
+    bMuddyEffectActive = false;
+    bSafeZoneActive = false;
+    
+    // Level 5 Blood Moon
+    bSecondMonsterSpawned = false;
+    bAggressiveModeActivated = false;
+    
+    // Reset player speed
+    if (Player)
+    {
+        ACharacter* PlayerChar = Cast<ACharacter>(Player);
+        if (PlayerChar && PlayerChar->GetCharacterMovement())
+        {
+            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = 600.0f;
+        }
+    }
+    
+    // Reset resolution
+    if (GEngine)
+    {
+        GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 100"));
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CleanupBeforeLevel] ✓ Cleanup complete"));
+}
+
+void AMazeGameMode::CreatePlayerFlashlight()
+{
+    if (!Player)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[CreatePlayerFlashlight] No player!"));
+        return;
+    }
+    
+    // FIX: Don't create if flashlight already exists
+    if (PlayerFlashlight)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CreatePlayerFlashlight] Flashlight already exists, skipping creation"));
+        return;
+    }
+    
+    PlayerFlashlight = NewObject<USpotLightComponent>(Player);
+    if (PlayerFlashlight)
+    {
+        PlayerFlashlight->RegisterComponent();
+        PlayerFlashlight->AttachToComponent(Player->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+        
+        // ENHANCED: Increased intensity and range for better visibility
+        PlayerFlashlight->SetIntensity(10000.0f);           // Increased from 6000 - much brighter
+        PlayerFlashlight->SetInnerConeAngle(20.0f);         // Tighter from 25 - sharper beam
+        PlayerFlashlight->SetOuterConeAngle(45.0f);         // Tighter from 50 - more focused
+        PlayerFlashlight->SetAttenuationRadius(3500.0f);    // Increased from 2500 - longer range
+        PlayerFlashlight->SetLightColor(FLinearColor(1.0f, 0.98f, 0.9f)); // Slightly warmer white
+        PlayerFlashlight->SetCastShadows(false);  // Disabled for performance
+        
+        PlayerFlashlight->SetRelativeLocation(FVector(50.0f, 0.0f, 60.0f));
+        PlayerFlashlight->SetRelativeRotation(FRotator(-15.0f, 0.0f, 0.0f));
+        
+        UE_LOG(LogTemp, Warning, TEXT("[CreatePlayerFlashlight] Flashlight created (Enhanced: 10000 intensity, 3500 range)"));
+    }
+}
+
+void AMazeGameMode::SpawnSafeZone(float ActivationTime)
+{
+    if (!SafeZoneCellClass || !MazeManager)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[SpawnSafeZone] SafeZoneCellClass not set!"));
+        return;
+    }
+    
+    // Find random cell (not escape cell)
+    AMazeCell* SafeCell = nullptr;
+    int32 Attempts = 0;
+    do {
+        SafeCell = MazeManager->GetRandomCell();
+        Attempts++;
+    } while (SafeCell && SafeCell->bIsEscapeCell && Attempts < 100);
+    
+    if (SafeCell)
+    {
+        FVector SpawnLoc = SafeCell->GetActorLocation();
+        SpawnLoc.Z = 50.0f;
+        
+        FActorSpawnParameters Params;
+        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        
+        SpawnedSafeZone = GetWorld()->SpawnActor<ASafeZoneCell>(SafeZoneCellClass, SpawnLoc, FRotator::ZeroRotator, Params);
+        
+        if (SpawnedSafeZone)
+        {
+            bSafeZoneActive = true;
+            SafeZoneActivationTime = ActivationTime;
+            UE_LOG(LogTemp, Warning, TEXT("[SpawnSafeZone] ✓ Safe zone spawned at [%d,%d]"), SafeCell->Row, SafeCell->Col);
+        }
+    }
+}
+
+void AMazeGameMode::CheckSafeZoneStatus()
+{
+    if (!Player || !SpawnedSafeZone) return;
+    
+    FVector PlayerLoc = Player->GetActorLocation();
+    FVector SafeZoneLoc = SpawnedSafeZone->GetActorLocation();
+    float Distance = FVector::Dist2D(PlayerLoc, SafeZoneLoc);
+    
+    if (Distance < 300.0f)
+    {
+        // Player is safe!
+        UE_LOG(LogTemp, Warning, TEXT("[SafeZone] ✓ Player is in safe zone!"));
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, TEXT("✓ SAFE! You're protected!"));
+        }
+    }
+    else
+    {
+        // Player is NOT safe - vulnerable to monster
+        UE_LOG(LogTemp, Warning, TEXT("[SafeZone] ✗ Player NOT in safe zone - vulnerable!"));
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("⚠️ NOT SAFE! Get to safe zone!"));
+        }
+    }
+}
+
+void AMazeGameMode::SpawnMuddyPatches(int32 Count)
+{
+    if (!MuddyPatchClass || !MazeManager)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[SpawnMuddyPatches] MuddyPatchClass not set!"));
+        return;
+    }
+    
+    for (int32 i = 0; i < Count; i++)
+    {
+        AMazeCell* PatchCell = MazeManager->GetRandomCell();
+        if (PatchCell && !PatchCell->bIsEscapeCell)
+        {
+            FVector SpawnLoc = PatchCell->GetActorLocation();
+            SpawnLoc.Z = 10.0f;
+            
+            FActorSpawnParameters Params;
+            Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+            
+            AMuddyPatch* Patch = GetWorld()->SpawnActor<AMuddyPatch>(MuddyPatchClass, SpawnLoc, FRotator::ZeroRotator, Params);
+            if (Patch)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("[SpawnMuddyPatches] ✓ Muddy patch %d spawned at [%d,%d]"), 
+                       i + 1, PatchCell->Row, PatchCell->Col);
+            }
+        }
+    }
+}
+
+// ==================== STUB IMPLEMENTATIONS FOR UNUSED FUNCTIONS ====================
+// These functions are declared in header but not currently used in the game flow
+// Implementing as stubs to avoid linker errors
+
+void AMazeGameMode::CalculateStarRating()
+{
+    // This functionality is now handled in CompleteLevel() using LevelManager->CalculateStarRating()
+    UE_LOG(LogTemp, Warning, TEXT("[CalculateStarRating] Stub - use CompleteLevel() instead"));
+}
+
+void AMazeGameMode::ShowLevelBriefing()
+{
+    // This functionality is now handled in StartLevel() with 8-second briefing
+    UE_LOG(LogTemp, Warning, TEXT("[ShowLevelBriefing] Stub - use StartLevel() instead"));
+}
+
+void AMazeGameMode::ShowLevelCompleteScreen()
+{
+    // This functionality is now handled in CompleteLevel() which auto-advances to next level
+    UE_LOG(LogTemp, Warning, TEXT("[ShowLevelCompleteScreen] Stub - use CompleteLevel() instead"));
+}
+
+void AMazeGameMode::RetryCurrentLevel()
+{
+    // Restart current level
+    UE_LOG(LogTemp, Warning, TEXT("[RetryCurrentLevel] Restarting level %d"), CurrentLevel);
+    StartLevel(CurrentLevel);
+}
+
+void AMazeGameMode::LoadNextLevel()
+{
+    // Load next level
+    if (CurrentLevel < 5)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[LoadNextLevel] Loading level %d"), CurrentLevel + 1);
+        StartLevel(CurrentLevel + 1);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[LoadNextLevel] Already at final level"));
+        ShowCredits();
+    }
+}
+
+void AMazeGameMode::HideLoadingScreen()
+{
+    // Loading screens auto-hide after duration in ShowLoadingScreen()
+    UE_LOG(LogTemp, Warning, TEXT("[HideLoadingScreen] Stub - loading screens auto-hide"));
+}
+
+void AMazeGameMode::CloseSettingsMenu()
+{
+    // Use HideSettingsMenu() instead
+    UE_LOG(LogTemp, Warning, TEXT("[CloseSettingsMenu] Calling HideSettingsMenu()"));
+    HideSettingsMenu();
+}
+
+void AMazeGameMode::SetMazeRows(int32 Rows)
+{
+    CurrentMazeRows = FMath::Clamp(Rows, 5, 30);
+    UE_LOG(LogTemp, Warning, TEXT("[SetMazeRows] Maze rows set to %d"), CurrentMazeRows);
+}
+
+void AMazeGameMode::SetMazeCols(int32 Cols)
+{
+    CurrentMazeCols = FMath::Clamp(Cols, 5, 30);
+    UE_LOG(LogTemp, Warning, TEXT("[SetMazeCols] Maze cols set to %d"), CurrentMazeCols);
+}
+
+void AMazeGameMode::ShowOptionsMenu()
+{
+    // Options menu functionality
+    UE_LOG(LogTemp, Warning, TEXT("[ShowOptionsMenu] Showing options menu"));
+    
+    if (OptionsMenuWidgetClass)
+    {
+        if (!OptionsMenuWidget)
+        {
+            OptionsMenuWidget = CreateWidget<UUserWidget>(GetWorld(), OptionsMenuWidgetClass);
+        }
+        
+        if (OptionsMenuWidget)
+        {
+            OptionsMenuWidget->AddToViewport(200);
+            
+            APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+            if (PC)
+            {
+                PC->bShowMouseCursor = true;
+                PC->SetInputMode(FInputModeUIOnly());
+            }
+        }
+    }
+}
+
+void AMazeGameMode::CloseOptionsMenu()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CloseOptionsMenu] Closing options menu"));
+    
+    if (OptionsMenuWidget)
+    {
+        OptionsMenuWidget->RemoveFromParent();
+        OptionsMenuWidget = nullptr;
+    }
+    
+    // Return to previous state
+    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+    if (PC)
+    {
+        if (CurrentGameState == EGameState::Playing)
+        {
+            PC->bShowMouseCursor = false;
+            PC->SetInputMode(FInputModeGameOnly());
+        }
+        else
+        {
+            PC->bShowMouseCursor = true;
+            PC->SetInputMode(FInputModeUIOnly());
         }
     }
 }
@@ -1519,421 +2308,140 @@ void AMazeGameMode::SetGameVolume(float Volume)
 {
     GameVolume = FMath::Clamp(Volume, 0.0f, 1.0f);
     
-    // Apply volume immediately
+    // Apply volume to audio device
     if (UWorld* World = GetWorld())
     {
-        FAudioDevice* AudioDevice = World->GetAudioDeviceRaw();
-        if (AudioDevice)
+        if (FAudioDevice* AudioDevice = World->GetAudioDeviceRaw())
         {
             AudioDevice->SetTransientPrimaryVolume(GameVolume);
+            UE_LOG(LogTemp, Warning, TEXT("[SetGameVolume] Volume set to %.2f"), GameVolume);
         }
     }
 }
 
-void AMazeGameMode::LoadSettings()
+void AMazeGameMode::CheckSafeZoneProtection()
 {
-    UE_LOG(LogTemp, Log, TEXT("[Settings] Loading settings..."));
-    
-    // Try to load existing save game
-    UMazeGameSettings* LoadedGame = Cast<UMazeGameSettings>(
-        UGameplayStatics::LoadGameFromSlot(
-            UMazeGameSettings::SaveSlotName,
-            UMazeGameSettings::UserIndex
-        )
-    );
-    
-    if (LoadedGame)
-    {
-        CurrentMazeRows = FMath::Clamp(LoadedGame->MazeRows, 1, 30);
-        CurrentMazeCols = FMath::Clamp(LoadedGame->MazeCols, 1, 30);
-        UE_LOG(LogTemp, Warning, TEXT("✓ Settings loaded: %dx%d"), CurrentMazeRows, CurrentMazeCols);
-    }
-    else
-    {
-        // No save file exists, use defaults
-        CurrentMazeRows = 15;
-        CurrentMazeCols = 15;
-        UE_LOG(LogTemp, Warning, TEXT("⚠ No saved settings found, using defaults: 15x15"));
-    }
+    // Use CheckSafeZoneStatus() instead
+    UE_LOG(LogTemp, Warning, TEXT("[CheckSafeZoneProtection] Calling CheckSafeZoneStatus()"));
+    CheckSafeZoneStatus();
 }
 
-void AMazeGameMode::ApplyMuddyEffect(float Duration, float ResolutionScale)
+bool AMazeGameMode::IsPlayerInSafeZone() const
 {
-    if (bMuddyEffectActive)
+    if (!Player || !SpawnedSafeZone)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Effect already active - extending duration"));
-        MuddyEffectTimer = FMath::Max(MuddyEffectTimer, Duration);  // Extend if new duration is longer
-        return;  // CRITICAL FIX: Don't stack effects, just extend timer
+        return false;
     }
     
-    // Store original resolution
+    FVector PlayerLoc = Player->GetActorLocation();
+    FVector SafeZoneLoc = SpawnedSafeZone->GetActorLocation();
+    float Distance = FVector::Dist2D(PlayerLoc, SafeZoneLoc);
+    
+    return Distance < 300.0f;
+}
+
+// CHEAT CODE: Instant Win
+void AMazeGameMode::Win()
+{
+    if (CurrentGameState != EGameState::Playing)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CHEAT] Win command ignored - not in playing state"));
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
+                TEXT("Cheat 'win' only works during gameplay!"));
+        }
+        return;
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CHEAT] Win command activated! Instant victory!"));
+    
+    // Show cheat message
     if (GEngine)
     {
-        OriginalResolution = 100.0f;  // Always assume 100% at start
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Cyan,
+            TEXT("🎮 CHEAT ACTIVATED: Instant Win!"));
     }
     
-    // Store original player speed and reduce it (ONLY if effect not already active)
-    if (Player)
+    // Complete the level instantly
+    CompleteLevel();
+}
+
+// ==================== LEVEL 5 BLOOD MOON FUNCTIONS ====================
+
+void AMazeGameMode::SpawnSecondMonster()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ⚠️ SECOND MONSTER SPAWNING!"));
+    
+    if (GEngine)
     {
-        ACharacter* PlayerChar = Cast<ACharacter>(Player);
-        if (PlayerChar && PlayerChar->GetCharacterMovement())
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON: SECOND MONSTER AWAKENS!"));
+    }
+    
+    // CRITICAL FIX: Reset bMonsterSpawned flag so SpawnMonster() works!
+    bMonsterSpawned = false;
+    
+    // Spawn using existing logic
+    SpawnMonster();
+}
+
+void AMazeGameMode::ActivateAggressiveMode()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ⚠️ AGGRESSIVE MODE ACTIVATED!"));
+    
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON: MONSTERS ENRAGED! SPEED INCREASED!"));
+    }
+    
+    // Make all monsters faster
+    for (AMonsterAI* Monster : SpawnedMonsters)
+    {
+        if (Monster && Monster->GetCharacterMovement())
         {
-            OriginalPlayerSpeed = PlayerChar->GetCharacterMovement()->MaxWalkSpeed;
-            float ReducedSpeed = OriginalPlayerSpeed * 0.5f;  // Reduce to 50% (half speed)
-            PlayerChar->GetCharacterMovement()->MaxWalkSpeed = ReducedSpeed;
-            
-            UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Player speed reduced: %.0f -> %.0f (50%%)"), 
-                   OriginalPlayerSpeed, ReducedSpeed);
+            float CurrentSpeed = Monster->GetCharacterMovement()->MaxWalkSpeed;
+            Monster->GetCharacterMovement()->MaxWalkSpeed = CurrentSpeed * 1.5f;  // 50% faster
+            UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] Monster speed: %.0f -> %.0f"), 
+                CurrentSpeed, Monster->GetCharacterMovement()->MaxWalkSpeed);
         }
     }
-    
-    // Apply muddy effect
-    bMuddyEffectActive = true;
-    MuddyEffectTimer = Duration;
+}
+
+void AMazeGameMode::SetBloodMoonAtmosphere()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] 🔴 Setting blood red atmosphere..."));
     
     if (GEngine)
     {
-        // CRITICAL FIX: Cap minimum resolution at 30% to prevent unplayable state
-        float TargetResolution = FMath::Max(ResolutionScale * 100.0f, 30.0f);
-        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] Target resolution capped at %.0f%% (requested %.0f%%)"), 
-               TargetResolution, ResolutionScale * 100.0f);
-        GEngine->Exec(GetWorld(), *FString::Printf(TEXT("r.ScreenPercentage %f"), TargetResolution));
-        
-        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect] ⚠️ Applied muddy effect!"));
-        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect]   Resolution: %.0f%% -> %.0f%%"), OriginalResolution, TargetResolution);
-        UE_LOG(LogTemp, Warning, TEXT("[MuddyEffect]   Duration: %.1f seconds"), Duration);
-    }
-}
-
-// ==================== MAZE TRAP SYSTEM ====================
-
-AMazeCell* AMazeGameMode::GetPlayerCurrentCell()
-{
-    if (!Player || !MazeManager)
-    {
-        UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Cannot get player cell - missing Player or MazeManager"));
-        return nullptr;
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON RISES - SURVIVE THE CRIMSON NIGHT!"));
     }
     
-    FVector PlayerLocation = Player->GetActorLocation();
-    
-    // Iterate through all cells to find which one contains the player
-    for (int32 Row = 0; Row < MazeManager->Rows; Row++)
+    // Find directional light and set to blood red
+    TArray<AActor*> FoundLights;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADirectionalLight::StaticClass(), FoundLights);
+    for (AActor* LightActor : FoundLights)
     {
-        for (int32 Col = 0; Col < MazeManager->Cols; Col++)
+        ADirectionalLight* DirLight = Cast<ADirectionalLight>(LightActor);
+        if (DirLight)
         {
-            AMazeCell* Cell = MazeManager->GetCell(Row, Col);
-            if (Cell)
+            // Blood red color
+            DirLight->SetLightColor(FLinearColor(0.8f, 0.0f, 0.0f));  // Deep red
+            // REDUCED INTENSITY - flashlight still useful!
+            if (DirLight->GetLightComponent())
             {
-                FVector CellLocation = Cell->GetActorLocation();
-                float CellSize = MazeManager->CellSize;
-                
-                // Check if player is within this cell's bounds
-                float HalfSize = CellSize / 2.0f;
-                if (FMath::Abs(PlayerLocation.X - CellLocation.X) <= HalfSize &&
-                    FMath::Abs(PlayerLocation.Y - CellLocation.Y) <= HalfSize)
-                {
-                    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player is in cell (%d, %d)"), Row, Col);
-                    return Cell;
-                }
-            }
-        }
-    }
-    
-    UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Could not find player's current cell!"));
-    return nullptr;
-}
-
-void AMazeGameMode::TrapPlayer(AMazeCell* Cell)
-{
-    if (!Cell || !Player)
-    {
-        UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Cannot trap player - missing Cell or Player"));
-        return;
-    }
-    
-    // Teleport player to center of cell
-    FVector CellCenter = Cell->GetActorLocation();
-    CellCenter.Z = Player->GetActorLocation().Z;  // Keep player's height
-    Player->SetActorLocation(CellCenter);
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player teleported to cell center: %s"), *CellCenter.ToString());
-    
-    // Show all 4 walls to trap player
-    Cell->ShowAllWalls();
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] All walls shown - player is trapped!"));
-    
-    // Disable player movement
-    ACharacter* PlayerChar = Cast<ACharacter>(Player);
-    if (PlayerChar && PlayerChar->GetCharacterMovement())
-    {
-        PlayerChar->GetCharacterMovement()->DisableMovement();
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player movement disabled"));
-    }
-    
-    // Show on-screen message
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, 
-            TEXT("⚠️ TRAPPED! Maze is regenerating..."));
-    }
-    
-    // Play regeneration sound
-    if (MazeRegenerationSound)
-    {
-        UGameplayStatics::PlaySound2D(GetWorld(), MazeRegenerationSound);
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Playing maze regeneration sound"));
-    }
-    
-    bPlayerTrapped = true;
-    TrapDuration = 5.0f;  // Reset trap duration
-}
-
-void AMazeGameMode::ReleaseTrap()
-{
-    if (!TrappedCell)
-    {
-        UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Cannot release trap - no trapped cell stored"));
-        bPlayerTrapped = false;
-        return;
-    }
-    
-    // Hide all 4 walls to free player
-    TrappedCell->HideAllWalls();
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] All walls hidden - player is free!"));
-    
-    // Re-enable player movement
-    if (Player)
-    {
-        ACharacter* PlayerChar = Cast<ACharacter>(Player);
-        if (PlayerChar && PlayerChar->GetCharacterMovement())
-        {
-            PlayerChar->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
-            UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player movement re-enabled"));
-        }
-    }
-    
-    // Show on-screen message
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Green, 
-            TEXT("✓ Released! Find the new escape!"));
-    }
-    
-    // Path will automatically update when player moves if they have the star
-    // No need to manually call HighlightPath here
-    
-    bPlayerTrapped = false;
-    TrappedCell = nullptr;
-}
-
-void AMazeGameMode::TriggerMazeTrap()
-{
-    if (bMazeTrapTriggered)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Trap already triggered this game"));
-        return;
-    }
-    
-    if (!MazeManager || !Player)
-    {
-        UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Cannot trigger trap - missing MazeManager or Player"));
-        return;
-    }
-    
-    bMazeTrapTriggered = true;
-    
-    UE_LOG(LogTemp, Warning, TEXT("========================================"));
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] ⚠️ MAZE TRAP TRIGGERED!"));
-    UE_LOG(LogTemp, Warning, TEXT("========================================"));
-    
-    // Step 1: Get player's current cell
-    AMazeCell* PlayerCell = GetPlayerCurrentCell();
-    if (!PlayerCell)
-    {
-        UE_LOG(LogTemp, Error, TEXT("[MazeTrap] Failed to get player cell - aborting trap"));
-        return;
-    }
-    
-    TrappedCell = PlayerCell;
-    int32 PlayerRow = TrappedCell->Row;
-    int32 PlayerCol = TrappedCell->Col;
-    
-    // Step 2: Teleport player to cell center (but don't show walls yet)
-    FVector CellCenter = PlayerCell->GetActorLocation();
-    CellCenter.Z = Player->GetActorLocation().Z;
-    Player->SetActorLocation(CellCenter);
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player teleported to cell center: %s"), *CellCenter.ToString());
-    
-    // Disable player movement
-    ACharacter* PlayerChar = Cast<ACharacter>(Player);
-    if (PlayerChar && PlayerChar->GetCharacterMovement())
-    {
-        PlayerChar->GetCharacterMovement()->DisableMovement();
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Player movement disabled"));
-    }
-    
-    // Show on-screen message
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, 
-            TEXT("⚠️ TRAPPED! Maze is regenerating..."));
-    }
-    
-    // Play regeneration sound
-    if (MazeRegenerationSound)
-    {
-        UGameplayStatics::PlaySound2D(GetWorld(), MazeRegenerationSound);
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Playing maze regeneration sound"));
-    }
-    
-    bPlayerTrapped = true;
-    TrapDuration = 5.0f;
-    
-    // Step 3: Despawn monster
-    if (SpawnedMonster)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Despawning monster"));
-        SpawnedMonster->Destroy();
-        SpawnedMonster = nullptr;
-    }
-    
-    // Step 4: Despawn golden star
-    if (SpawnedStar)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Despawning golden star"));
-        SpawnedStar->Destroy();
-        SpawnedStar = nullptr;
-    }
-    
-    // Step 5: Regenerate maze (preserve trapped cell)
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Regenerating maze while preserving trapped cell..."));
-    MazeManager->GenerateMaze(TrappedCell);  // Pass trapped cell to preserve it
-    
-    // Step 6: NOW show all walls of trapped cell (after regeneration)
-    // The cell was preserved, so now we just make its walls visible
-    TrappedCell->ShowAllWalls();
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Trapped cell walls shown - player is now visibly trapped!"));
-    
-    // Step 7: Respawn monster at least 4 cells away from player
-    TArray<AMazeCell*> ValidMonsterCells;
-    for (int32 Row = 0; Row < MazeManager->Rows; Row++)
-    {
-        for (int32 Col = 0; Col < MazeManager->Cols; Col++)
-        {
-            int32 Distance = FMath::Abs(Row - PlayerRow) + FMath::Abs(Col - PlayerCol);
-            if (Distance >= 4)
-            {
-                AMazeCell* Cell = MazeManager->GetCell(Row, Col);
-                if (Cell)
-                {
-                    ValidMonsterCells.Add(Cell);
-                }
-            }
-        }
-    }
-    
-    if (ValidMonsterCells.Num() > 0 && MonsterClass)
-    {
-        int32 RandomIndex = FMath::RandRange(0, ValidMonsterCells.Num() - 1);
-        AMazeCell* MonsterCell = ValidMonsterCells[RandomIndex];
-        
-        FVector MonsterSpawnLocation = MonsterCell->GetActorLocation();
-        MonsterSpawnLocation.Z += 100.0f;
-        
-        SpawnedMonster = GetWorld()->SpawnActor<AMonsterAI>(
-            MonsterClass,
-            MonsterSpawnLocation,
-            FRotator::ZeroRotator
-        );
-        
-        if (SpawnedMonster)
-        {
-            // Manually initialize monster AI since it was spawned mid-game
-            SpawnedMonster->Initialize();
-            
-            UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Monster respawned at (%d, %d) and manually initialized"),
-                   MonsterCell->Row, MonsterCell->Col);
-        }
-    }
-    
-    // Step 7: Respawn golden star at least 4 cells away from player
-    TArray<AMazeCell*> ValidStarCells;
-    for (int32 Row = 0; Row < MazeManager->Rows; Row++)
-    {
-        for (int32 Col = 0; Col < MazeManager->Cols; Col++)
-        {
-            int32 Distance = FMath::Abs(Row - PlayerRow) + FMath::Abs(Col - PlayerCol);
-            if (Distance >= 4)
-            {
-                AMazeCell* Cell = MazeManager->GetCell(Row, Col);
-                if (Cell && Cell != MazeManager->EscapeCell)
-                {
-                    ValidStarCells.Add(Cell);
-                }
-            }
-        }
-    }
-    
-    if (ValidStarCells.Num() > 0 && GoldenStarClass)
-    {
-        int32 RandomIndex = FMath::RandRange(0, ValidStarCells.Num() - 1);
-        AMazeCell* StarCell = ValidStarCells[RandomIndex];
-        
-        FVector StarSpawnLocation = StarCell->GetActorLocation();
-        StarSpawnLocation.Z += 50.0f;
-        
-        SpawnedStar = GetWorld()->SpawnActor<AGoldenStar>(
-            GoldenStarClass,
-            StarSpawnLocation,
-            FRotator::ZeroRotator
-        );
-        
-        if (SpawnedStar)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Golden star respawned at (%d, %d)"),
-                   StarCell->Row, StarCell->Col);
-        }
-    }
-    
-    UE_LOG(LogTemp, Warning, TEXT("[MazeTrap] Trap sequence complete - player will be released in 5 seconds"));
-}
-
-void AMazeGameMode::ShowLoadingScreen(const FString& Message, float MinDuration)
-{
-    if (LoadingScreenWidgetClass)
-    {
-        if (!LoadingScreenWidget)
-        {
-            LoadingScreenWidget = CreateWidget<UUserWidget>(GetWorld(), LoadingScreenWidgetClass);
-        }
-        
-        if (LoadingScreenWidget)
-        {
-            LoadingScreenWidget->AddToViewport(1000);
-            
-            ULoadingScreenWidget* LoadingScreen = Cast<ULoadingScreenWidget>(LoadingScreenWidget);
-            if (LoadingScreen)
-            {
-                LoadingScreen->SetInstructions(Message);
+                DirLight->GetLightComponent()->SetIntensity(0.3f);  // Very low - flashlight needed!
             }
             
-            // CRITICAL FIX: Use GetWorldTimerManager with a lambda to ensure hiding works
-            FTimerHandle LoadingTimer;
-            GetWorldTimerManager().SetTimer(LoadingTimer, [this]()
-            {
-                HideLoadingScreen();
-            }, MinDuration, false);
-            
-            UE_LOG(LogTemp, Warning, TEXT("[LoadingScreen] ✓ Showing for %.1fs: %s"), MinDuration, *Message);
+            UE_LOG(LogTemp, Warning, TEXT("[BloodMoon] ✓ Directional light set to blood red"));
         }
+    }
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+            TEXT("🔴 BLOOD MOON RISES - SURVIVE THE CRIMSON NIGHT!"));
     }
 }
 
-void AMazeGameMode::HideLoadingScreen()
-{
-    if (LoadingScreenWidget && LoadingScreenWidget->IsInViewport())
-    {
-        LoadingScreenWidget->RemoveFromParent();
-        UE_LOG(LogTemp, Warning, TEXT("[LoadingScreen] ✓ Hidden"));
-    }
-}
