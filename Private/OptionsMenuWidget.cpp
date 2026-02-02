@@ -1,6 +1,7 @@
 // OptionsMenuWidget.cpp
 #include "OptionsMenuWidget.h"
 #include "MazeGameMode.h"
+#include "MazeGameSettings.h"
 #include "Components/SpinBox.h"
 #include "Components/Button.h"
 #include "Components/ComboBoxString.h"
@@ -59,26 +60,18 @@ void UOptionsMenuWidget::NativeConstruct()
         ComboBox_Graphics->AddOption(TEXT("High"));
         ComboBox_Graphics->AddOption(TEXT("Ultra High"));
         
-        // Set current quality
-        FString CurrentQuality = TEXT("High"); // Default
-        if (Settings)
-        {
-            int32 QualityLevel = Settings->GetOverallScalabilityLevel();
-            switch (QualityLevel)
-            {
-                case 0: CurrentQuality = TEXT("Low"); break;
-                case 1: CurrentQuality = TEXT("Medium"); break;
-                case 2: CurrentQuality = TEXT("High"); break;
-                case 3: CurrentQuality = TEXT("Ultra High"); break;
-                default: CurrentQuality = TEXT("High"); break;
-            }
-        }
+        // Load saved quality from MazeGameSettings (supports Ultra High)
+        UMazeGameSettings* GameSettings = NewObject<UMazeGameSettings>();
+        FString CurrentQuality = GameSettings->LoadGraphicsQuality();
         
         ComboBox_Graphics->SetSelectedOption(CurrentQuality);
         OriginalGraphicsQuality = CurrentQuality;
         
+        // Apply the loaded quality immediately
+        ApplyGraphicsQuality(CurrentQuality);
+        
         ComboBox_Graphics->OnSelectionChanged.AddDynamic(this, &UOptionsMenuWidget::OnGraphicsQualityChanged);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Graphics quality initialized: %s"), *CurrentQuality);
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Graphics quality loaded and applied: %s"), *CurrentQuality);
     }
     
     // Bind button click events
@@ -120,13 +113,23 @@ void UOptionsMenuWidget::OnSaveClicked()
         UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Saved game volume: %.2f"), Volume);
     }
     
-    // Save graphics quality
-    if (ComboBox_Graphics && Settings)
+    // Save graphics quality to custom save game
+    if (ComboBox_Graphics)
     {
         FString Quality = ComboBox_Graphics->GetSelectedOption();
         ApplyGraphicsQuality(Quality);
-        Settings->ApplySettings(false);
-        Settings->SaveSettings();
+        
+        // Save to custom save game (supports Ultra High)
+        UMazeGameSettings* GameSettings = NewObject<UMazeGameSettings>();
+        GameSettings->SaveGraphicsQuality(Quality);
+        
+        // Also save to UGameUserSettings for engine settings
+        if (Settings)
+        {
+            Settings->ApplySettings(false);
+            Settings->SaveSettings();
+        }
+        
         UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Saved graphics quality: %s"), *Quality);
     }
     
@@ -207,37 +210,53 @@ void UOptionsMenuWidget::ApplyGraphicsQuality(const FString& Quality)
     
     if (Quality == TEXT("Low"))
     {
-        // Low: Post-processing OFF
+        // Low: 70% resolution for better performance
+        if (GEngine)
+        {
+            GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 70"));
+        }
         Settings->SetPostProcessingQuality(0);
         Settings->SetShadowQuality(0);
         Settings->SetTextureQuality(0);
         Settings->SetVisualEffectQuality(0);
         Settings->SetOverallScalabilityLevel(0);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied LOW graphics (Post-processing OFF)"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied LOW graphics (70%% resolution)"));
     }
     else if (Quality == TEXT("Medium"))
     {
-        // Medium: Post-processing PARTIALLY ON
+        // Medium: 80% resolution for balanced performance
+        if (GEngine)
+        {
+            GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 80"));
+        }
         Settings->SetPostProcessingQuality(1);
         Settings->SetShadowQuality(1);
         Settings->SetTextureQuality(1);
         Settings->SetVisualEffectQuality(1);
         Settings->SetOverallScalabilityLevel(1);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied MEDIUM graphics (Post-processing PARTIAL)"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied MEDIUM graphics (80%% resolution)"));
     }
     else if (Quality == TEXT("High"))
     {
-        // High: Post-processing ON with medium-high settings
+        // High: 90% resolution for high quality
+        if (GEngine)
+        {
+            GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 90"));
+        }
         Settings->SetPostProcessingQuality(2);
         Settings->SetShadowQuality(2);
         Settings->SetTextureQuality(2);
         Settings->SetVisualEffectQuality(2);
         Settings->SetOverallScalabilityLevel(2);
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied HIGH graphics (Post-processing MEDIUM-HIGH)"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied HIGH graphics (90%% resolution)"));
     }
     else if (Quality == TEXT("Ultra High"))
     {
-        // Ultra High: MAXIMUM graphics quality - all settings at epic level
+        // Ultra High: 100% native resolution - MAXIMUM graphics quality
+        if (GEngine)
+        {
+            GEngine->Exec(GetWorld(), TEXT("r.ScreenPercentage 100"));
+        }
         Settings->SetPostProcessingQuality(4);  // Epic post-processing
         Settings->SetShadowQuality(4);          // Epic shadows
         Settings->SetTextureQuality(4);         // Epic textures
@@ -246,6 +265,6 @@ void UOptionsMenuWidget::ApplyGraphicsQuality(const FString& Quality)
         Settings->SetViewDistanceQuality(4);    // Epic view distance
         Settings->SetFoliageQuality(4);         // Epic foliage
         Settings->SetOverallScalabilityLevel(4); // Epic overall
-        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied ULTRA HIGH graphics (EPIC quality - maximum settings)"));
+        UE_LOG(LogTemp, Warning, TEXT("[OptionsMenu] Applied ULTRA HIGH graphics (100%% resolution - EPIC quality)"));
     }
 }

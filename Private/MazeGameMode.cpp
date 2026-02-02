@@ -1699,6 +1699,7 @@ void AMazeGameMode::StartLevel(int32 LevelNumber)
             }
             
             Briefing->SetInstructions(BriefingText);
+            Briefing->SetLevelNumber(LevelNumber);  // Display "Starting Level X..." for 2 seconds
             Briefing->AddToViewport(999);
             
             // Remove briefing after 8 seconds and start level
@@ -2303,6 +2304,67 @@ void AMazeGameMode::CloseOptionsMenu()
         }
     }
 }
+
+void AMazeGameMode::OpenGuidelinesMenu()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[OpenGuidelinesMenu] Opening guidelines menu"));
+    
+    if (!GuidelinesWidgetClass)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[OpenGuidelinesMenu] GuidelinesWidgetClass not set!"));
+        return;
+    }
+    
+    if (!GuidelinesWidget)
+    {
+        GuidelinesWidget = CreateWidget<UUserWidget>(GetWorld(), GuidelinesWidgetClass);
+        if (GuidelinesWidget)
+        {
+            GuidelinesWidget->AddToViewport(100);
+            
+            // Pause game and show mouse
+            APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+            if (PC)
+            {
+                PC->bShowMouseCursor = true;
+                PC->SetInputMode(FInputModeUIOnly());
+            }
+            
+            UE_LOG(LogTemp, Warning, TEXT("[OpenGuidelinesMenu] Guidelines menu opened"));
+        }
+    }
+}
+
+void AMazeGameMode::CloseGuidelinesMenu()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CloseGuidelinesMenu] Closing guidelines menu"));
+    
+    if (GuidelinesWidget)
+    {
+        GuidelinesWidget->RemoveFromParent();
+        GuidelinesWidget = nullptr;
+    }
+    
+    // Return to previous state
+    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+    if (PC)
+    {
+        if (CurrentGameState == EGameState::Playing)
+        {
+            PC->bShowMouseCursor = false;
+            PC->SetInputMode(FInputModeGameOnly());
+        }
+        else
+        {
+            // Still in menu, keep mouse visible
+            PC->bShowMouseCursor = true;
+            PC->SetInputMode(FInputModeUIOnly());
+        }
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CloseGuidelinesMenu] Guidelines menu closed"));
+}
+
 
 void AMazeGameMode::SetGameVolume(float Volume)
 {

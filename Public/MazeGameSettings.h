@@ -29,6 +29,9 @@ public:
     UPROPERTY(VisibleAnywhere, Category = "Options")
     float GameVolume;
     
+    UPROPERTY(VisibleAnywhere, Category = "Options")
+    FString GraphicsQuality;  // "Low", "Medium", "High", "Ultra High"
+    
     // ==================== LEVEL PROGRESSION DATA ====================
     
     UPROPERTY(VisibleAnywhere, Category = "Level Progression")
@@ -45,6 +48,14 @@ public:
     
     UPROPERTY(VisibleAnywhere, Category = "Level Progression")
     int32 TotalLevelsCompleted;
+    
+    // Save/Load functions for settings
+    void SaveGraphicsQuality(const FString& Quality);
+    FString LoadGraphicsQuality();
+    void SaveMouseSensitivity(float Sensitivity);
+    float LoadMouseSensitivity();
+    void SaveGameVolume(float Volume);
+    float LoadGameVolume();
     
     // Save slot name
     static const FString SaveSlotName;

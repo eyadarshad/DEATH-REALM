@@ -25,9 +25,16 @@ public:
     UPROPERTY(meta = (BindWidgetOptional))
     class UTextBlock* Text_Instructions;  // Loading instructions
     
+    UPROPERTY(meta = (BindWidgetOptional))
+    class UTextBlock* Text_LevelNumber;  // "Starting Level X..." display
+    
     // Set loading message/instructions
     UFUNCTION(BlueprintCallable, Category = "Loading")
     void SetInstructions(const FString& Instructions);
+    
+    // Set and display level number for 2 seconds
+    UFUNCTION(BlueprintCallable, Category = "Loading")
+    void SetLevelNumber(int32 LevelNum);
     
 private:
     float RotationAngle = 0.0f;

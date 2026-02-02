@@ -146,6 +146,12 @@ public:
     UPROPERTY()
     class UUserWidget* OptionsMenuWidget;
     
+    UPROPERTY(EditAnywhere, Category = "UI")
+    TSubclassOf<class UUserWidget> GuidelinesWidgetClass;
+    
+    UPROPERTY()
+    class UUserWidget* GuidelinesWidget;
+    
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
     TSubclassOf<class UUserWidget> LoadingScreenWidgetClass;
     
@@ -417,6 +423,12 @@ public:
     
     UFUNCTION(BlueprintCallable, Category = "UI")
     void CloseOptionsMenu();
+    
+    UFUNCTION(BlueprintCallable, Category = "UI")
+    void OpenGuidelinesMenu();
+    
+    UFUNCTION(BlueprintCallable, Category = "UI")
+    void CloseGuidelinesMenu();
     
     UFUNCTION(BlueprintCallable, Category = "Settings")
     float GetMouseSensitivity() const { return MouseSensitivity; }

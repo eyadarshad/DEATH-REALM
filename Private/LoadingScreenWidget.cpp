@@ -93,3 +93,28 @@ void ULoadingScreenWidget::ShowNextTip()
         CurrentTipIndex = (CurrentTipIndex + 1) % GameplayTips.Num();
     }
 }
+
+void ULoadingScreenWidget::SetLevelNumber(int32 LevelNum)
+{
+    if (Text_LevelNumber)
+    {
+        // Set the level number text
+        FString LevelText = FString::Printf(TEXT("Starting Level %d..."), LevelNum);
+        Text_LevelNumber->SetText(FText::FromString(LevelText));
+        Text_LevelNumber->SetVisibility(ESlateVisibility::Visible);
+        
+        UE_LOG(LogTemp, Warning, TEXT("[LoadingScreen] Displaying: %s"), *LevelText);
+        
+        // Hide after 2 seconds
+        FTimerHandle TimerHandle;
+        GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
+        {
+            if (Text_LevelNumber)
+            {
+                Text_LevelNumber->SetVisibility(ESlateVisibility::Collapsed);
+                UE_LOG(LogTemp, Warning, TEXT("[LoadingScreen] Level number hidden after 2 seconds"));
+            }
+        }, 2.0f, false);
+    }
+}
+

@@ -24,4 +24,14 @@ public:
 
     UPROPERTY()
     TMap<int32, float> LevelBestTimes;  // Level number -> Best time
+    
+    // Graphics and audio settings
+    UPROPERTY()
+    FString GraphicsQuality;  // "Low", "Medium", "High", "Ultra High"
+    
+    UPROPERTY()
+    float MouseSensitivity;
+    
+    UPROPERTY()
+    float GameVolume;
 };
