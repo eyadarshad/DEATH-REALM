@@ -1,0 +1,43 @@
+END-USER LICENSE AGREEMENT (EULA)
+DEATH REALM
+
+Copyright (c) 2026 EYAD. All rights reserved.
+
+IMPORTANT – READ CAREFULLY:
+This End-User License Agreement ("EULA") is a legal agreement between you and EYAD ("Licensor") for the software product identified above ("SOFTWARE PRODUCT"), which includes the executable game, associated media, and documentation.
+
+By installing, copying, or otherwise using the SOFTWARE PRODUCT, you agree to be bound by the terms of this EULA.
+
+1. GRANT OF LICENSE
+EYAD grants you a non-exclusive, non-transferable, revocable license to:
+- Install and use the SOFTWARE PRODUCT for personal, non-commercial use.
+- Make copies of the SOFTWARE PRODUCT solely for backup and personal use.
+
+2. RESTRICTIONS
+You may NOT:
+- Modify, reverse engineer, decompile, or disassemble the SOFTWARE PRODUCT or its assets.
+- Sell, rent, lease, or sublicense the SOFTWARE PRODUCT.
+- Redistribute modified builds of the SOFTWARE PRODUCT.
+- Use game assets for commercial purposes without explicit permission.
+
+This restriction does NOT apply to the open-source code published separately by EYAD under its respective license.
+
+3. COPYRIGHT AND OWNERSHIP
+All rights, title, and interest in and to the SOFTWARE PRODUCT, including all assets, audio, visuals, and branding, are owned by EYAD.
+
+4. USER-GENERATED CONTENT
+You may record, stream, and publish gameplay videos or screenshots for personal or monetized content platforms, provided the SOFTWARE PRODUCT is not misrepresented or claimed as your own.
+
+5. NO WARRANTIES
+The SOFTWARE PRODUCT is provided "AS IS", without warranty of any kind.
+
+6. LIMITATION OF LIABILITY
+In no event shall EYAD be liable for any damages arising out of the use or inability to use the SOFTWARE PRODUCT.
+
+7. TERMINATION
+This EULA will terminate automatically if you fail to comply with its terms. Upon termination, you must delete all copies of the SOFTWARE PRODUCT.
+
+8. GOVERNING LAW
+This EULA shall be governed by the laws applicable in EYAD’s jurisdiction.
+
+DEATH REALM is a trademark of EYAD.
