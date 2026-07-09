@@ -1,3 +1,6 @@
+<img width="959" height="539" alt="image" src="https://github.com/user-attachments/assets/203bb8e2-767f-4148-b000-f52cd660ac91" />
+
+
 # DEATH REALM
 
 [![Release](https://img.shields.io/badge/Release-v1.0-red)](https://eyadinit.itch.io/death-realm)
