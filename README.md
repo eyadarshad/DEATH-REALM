@@ -1,5 +1,4 @@
-<img width="959" height="539" alt="image" src="https://github.com/user-attachments/assets/203bb8e2-767f-4148-b000-f52cd660ac91" />
-
+<img width="432" height="462" alt="Adobe Express - file (2)" src="https://github.com/user-attachments/assets/e61ac75c-60d9-4c2e-bd95-e3034c5e2a29" />
 
 # DEATH REALM
 
@@ -18,6 +17,9 @@
 DEATH REALM is a survival horror maze game developed in Unreal Engine 5. Players navigate increasingly complex labyrinths while being hunted by an adaptive AI monster. The game features time-based challenges, multiple hazard types, and five escalating difficulty levels.
 
 ---
+<img width="959" height="539" alt="image" src="https://github.com/user-attachments/assets/203bb8e2-767f-4148-b000-f52cd660ac91" />
+<img width="959" height="536" alt="Screenshot 2026-07-09 213048" src="https://github.com/user-attachments/assets/df6da426-283e-481e-acee-17e396906151" />
+
 
 ## Features
 
