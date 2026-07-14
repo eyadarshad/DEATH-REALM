@@ -1,5 +1,5 @@
 <img width="432" height="462" alt="Adobe Express - file (2)" src="https://github.com/user-attachments/assets/e61ac75c-60d9-4c2e-bd95-e3034c5e2a29" />
-<img width="959" height="539" alt="image" src="https://github.com/user-attachments/assets/b1f307d9-b6b4-46e7-86d0-ba21f649b3c4" />
+
 
 # DEATH REALM
 
@@ -34,7 +34,7 @@ DEATH REALM is a survival horror maze game developed in Unreal Engine 5. Players
 ---
 
 ## Gameplay
-
+<img width="959" height="539" alt="image" src="https://github.com/user-attachments/assets/b1f307d9-b6b4-46e7-86d0-ba21f649b3c4" />
 ### Objective
 Navigate mazes to find the Golden Star, unlock the escape cell, and exit before time runs out while evading an AI-controlled monster.
 
